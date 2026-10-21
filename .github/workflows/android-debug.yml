@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -54,53 +54,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Email APK or download link
+      - name: Publish public APK download link
         env:
-          GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          APK_RECIPIENT_EMAIL: ${{ secrets.APK_RECIPIENT_EMAIL }}
-          APK_ARTIFACT_URL: ${{ steps.upload_apk.outputs.artifact-url }}
-          APK_PATH: apps/store_app/build/app/outputs/flutter-apk/app-debug.apk
+          GH_TOKEN: ${{ github.token }}
+          APK_PATH: ${{ github.workspace }}/apps/store_app/build/app/outputs/flutter-apk/bootic-debug.apk
         run: |
-          python3 - <<'PY'
-          import os
-          import smtplib
-          from email.message import EmailMessage
-          from pathlib import Path
-
-          sender = os.environ.get("GMAIL_USERNAME", "").strip()
-          password = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
-          recipient = os.environ.get("APK_RECIPIENT_EMAIL", "").strip()
-          artifact_url = os.environ.get("APK_ARTIFACT_URL", "").strip()
-          apk_path = Path(os.environ["APK_PATH"])
-
-          if not sender or not password or not recipient:
-              print("Email skipped: add GMAIL_USERNAME, GMAIL_APP_PASSWORD, and APK_RECIPIENT_EMAIL in GitHub Actions secrets.")
-              raise SystemExit(0)
-
-          message = EmailMessage()
-          message["Subject"] = "فایل نصب آزمایشی اپ بوتیک"
-          message["From"] = sender
-          message["To"] = recipient
-
-          max_attachment_size = 18 * 1024 * 1024
-          if apk_path.stat().st_size <= max_attachment_size:
-              message.set_content("فایل APK آزمایشی اپ بوتیک پیوست شده است. برای نصب، فایل app-debug.apk را روی گوشی باز کنید.")
-              message.add_attachment(
-                  apk_path.read_bytes(),
-                  maintype="application",
-                  subtype="vnd.android.package-archive",
-                  filename="bootic-debug.apk",
-              )
-          else:
-              message.set_content(
-                  "حجم APK از حد مناسب برای پیوست ایمیل بیشتر است. از لینک زیر برای دریافت Artifact استفاده کنید. "
-                  "برای دانلود باید به GitHub وارد شده باشید؛ Artifact تا ۳۰ روز نگه‌داری می‌شود.\n\n"
-                  + artifact_url
-              )
-
-          with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
-              smtp.login(sender, password)
-              smtp.send_message(message)
-          print(f"APK delivery email sent to {recipient}.")
-          PY
+          cp build/app/outputs/flutter-apk/app-debug.apk "$APK_PATH"
+          if gh release view debug-latest >/dev/null 2>&1; then
+            gh release upload debug-latest "$APK_PATH" --clobber
+          else
+            gh release create debug-latest "$APK_PATH" \
+              --title "دانلود آزمایشی بوتیک" \
+              --notes "آخرین APK آزمایشی بوتیک. این build برای تست است و با هر اجرای موفق به‌روزرسانی می‌شود." \
+              --prerelease
+          fi

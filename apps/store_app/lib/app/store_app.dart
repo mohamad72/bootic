@@ -6,8 +6,6 @@ import '../presentation/login_screen.dart';
 import '../presentation/dashboard_screen.dart';
 import '../presentation/garment_editor_screen.dart';
 import '../presentation/garment_detail_screen.dart';
-import '../presentation/customer_screen.dart';
-import '../presentation/live_tryon_screen.dart';
 import 'providers.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -31,10 +29,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/garment/:id',
         builder: (_, s) => GarmentDetailScreen(id: s.pathParameters['id']!),
       ),
-      GoRoute(path: '/customer', builder: (_, _) => const CustomerScreen()),
+      GoRoute(
+        path: '/customer',
+        builder: (_, _) => const DashboardScreen(initialTab: 1),
+      ),
       GoRoute(
         path: '/live-preview',
-        builder: (_, _) => const LiveTryonScreen(),
+        builder: (_, _) => const DashboardScreen(initialTab: 1),
       ),
     ],
     errorBuilder: (context, state) => Scaffold(
