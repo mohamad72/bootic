@@ -66,6 +66,20 @@ class MainActivity : FlutterActivity() {
     private var lastPoseResultTs = -1L
     private var lastDetectMs = 0L
     private var validPoseAfterMs = 0L
+    @Volatile private var gestureEnabled = false
+    @Volatile private var gestureTracker: GestureTracker? = null
+    private var pendingGesture: MethodChannel.Result? = null
+    private var gestureGeneration = 0
+    private var lastGestureDetectMs = 0L
+    private var lastGestureResultTs = -1L
+    private var validGestureAfterMs = 0L
+    private var gestureCandidate: String? = null
+    private var gestureCount = 0
+    private var neutralCount = 0
+    private var gestureArmed = true
+    private var lastVoteMs = 0L
+    private var priceText = ""
+    private var feedbackText = ""
     private val staleHandler = Handler(Looper.getMainLooper())
     private val staleCheck = object : Runnable {
         override fun run() {
@@ -106,13 +120,20 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         autoPlacement = false
         autoGeneration++
+        gestureEnabled = false
+        gestureGeneration++
         stopCamera()
         detachDisplay()
         if (::displayManager.isInitialized) displayManager.unregisterDisplayListener(displayListener)
         pendingAuto?.error("STOPPED", "تشخیص بدن متوقف شد", null)
         pendingAuto = null
+        pendingGesture?.error("STOPPED", "تشخیص علامت دست متوقف شد", null)
+        pendingGesture = null
         staleHandler.removeCallbacks(staleCheck)
-        try { cameraExecutor.execute { poseTracker?.close(); poseTracker = null } } catch (_: Exception) { }
+        try { cameraExecutor.execute {
+            poseTracker?.close(); poseTracker = null
+            gestureTracker?.close(); gestureTracker = null
+        } } catch (_: Exception) { }
         cameraExecutor.shutdown()
         pendingCapture?.success(null)
         pendingCapture = null
@@ -188,6 +209,8 @@ class MainActivity : FlutterActivity() {
                         presentation = CustomerPresentation(this, target).also {
                             it.show()
                             it.setGarment(garment)
+                            it.setPrice(priceText)
+                            it.setFeedback(feedbackText)
                             it.setPlacement(placement)
                             it.setMirror(mirror)
                             it.setPoseVisible(!autoPlacement)
@@ -202,6 +225,17 @@ class MainActivity : FlutterActivity() {
             "detachDisplay" -> { detachDisplay(); result.success(null) }
             "setGarment" -> setGarment(call, result)
             "setAutoPlacement" -> setAutoPlacement(call, result)
+            "setGestureControl" -> setGestureControl(call, result)
+            "setPrice" -> {
+                priceText = call.argument<String>("text")?.take(80) ?: ""
+                presentation?.setPrice(priceText)
+                result.success(null)
+            }
+            "setFeedback" -> {
+                feedbackText = call.argument<String>("text")?.take(80) ?: ""
+                presentation?.setFeedback(feedbackText)
+                result.success(null)
+            }
             "setPlacement" -> {
                 val x = call.number("centerX")
                 val y = call.number("centerY")
@@ -317,6 +351,115 @@ class MainActivity : FlutterActivity() {
         eventSink?.success(mapOf("type" to "placement", "visible" to false))
         staleHandler.removeCallbacks(staleCheck)
         if (running) staleHandler.postDelayed(staleCheck, 200)
+    }
+
+    private fun setGestureControl(call: MethodCall, result: MethodChannel.Result) {
+        val enabled = call.argument<Boolean>("enabled")
+        if (enabled == null) { result.error("BAD_GESTURE", "حالت علامت دست نامعتبر است", null); return }
+        if (!enabled) {
+            gestureGeneration++
+            pendingGesture?.error("CANCELLED", "تشخیص علامت دست لغو شد", null)
+            pendingGesture = null
+            gestureEnabled = false
+            resetGestureState()
+            result.success(null)
+            return
+        }
+        if (pendingGesture != null) { result.error("BUSY", "مدل دست در حال آماده‌سازی است", null); return }
+        if (gestureTracker != null) {
+            enableGestures()
+            result.success(null)
+            return
+        }
+        val generation = ++gestureGeneration
+        pendingGesture = result
+        cameraExecutor.execute {
+            try {
+                val tracker = GestureTracker(this, { label, timestamp ->
+                    runOnUiThread { onGestureResult(label, timestamp) }
+                }, {
+                    runOnUiThread { failGestures("تشخیص علامت دست متوقف شد؛ از دکمه‌ها استفاده کنید") }
+                })
+                runOnUiThread {
+                    if (generation != gestureGeneration || isDestroyed) {
+                        try { cameraExecutor.execute { tracker.close() } } catch (_: Exception) { tracker.close() }
+                    } else {
+                        gestureTracker = tracker
+                        enableGestures()
+                        pendingGesture?.success(null)
+                        pendingGesture = null
+                    }
+                }
+            } catch (_: Exception) {
+                runOnUiThread {
+                    if (generation == gestureGeneration) {
+                        pendingGesture?.error("GESTURE_UNAVAILABLE", "مدل علامت دست آماده نشد؛ از دکمه‌ها استفاده کنید", null)
+                        pendingGesture = null
+                    }
+                }
+            } catch (_: LinkageError) {
+                runOnUiThread {
+                    if (generation == gestureGeneration) {
+                        pendingGesture?.error("GESTURE_UNAVAILABLE", "مدل علامت دست روی این دستگاه اجرا نشد", null)
+                        pendingGesture = null
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resetGestureState() {
+        gestureCandidate = null
+        gestureCount = 0
+        neutralCount = 0
+        gestureArmed = true
+        lastGestureResultTs = -1L
+        validGestureAfterMs = SystemClock.uptimeMillis()
+    }
+
+    private fun enableGestures() {
+        resetGestureState()
+        gestureEnabled = true
+    }
+
+    private fun failGestures(message: String) {
+        if (!gestureEnabled) return
+        gestureEnabled = false
+        gestureGeneration++
+        resetGestureState()
+        val failed = gestureTracker
+        gestureTracker = null
+        try { cameraExecutor.execute { failed?.close() } } catch (_: Exception) { failed?.close() }
+        eventSink?.success(mapOf("type" to "gestureError", "message" to message))
+    }
+
+    private fun onGestureResult(label: String?, timestamp: Long) {
+        if (!running || !gestureEnabled || timestamp < validGestureAfterMs ||
+            timestamp <= lastGestureResultTs) return
+        lastGestureResultTs = timestamp
+        if (label == null) {
+            gestureCandidate = null
+            gestureCount = 0
+            neutralCount++
+            if (neutralCount >= 4 && SystemClock.uptimeMillis() - lastVoteMs >= 1600) {
+                gestureArmed = true
+            }
+            return
+        }
+        if (!gestureArmed && neutralCount >= 4 &&
+            SystemClock.uptimeMillis() - lastVoteMs >= 1600) gestureArmed = true
+        neutralCount = 0
+        if (!gestureArmed || SystemClock.uptimeMillis() - lastVoteMs < 1600) return
+        if (gestureCandidate == label) gestureCount++ else {
+            gestureCandidate = label
+            gestureCount = 1
+        }
+        if (gestureCount < 3) return
+        gestureArmed = false
+        lastVoteMs = SystemClock.uptimeMillis()
+        gestureCandidate = null
+        gestureCount = 0
+        eventSink?.success(mapOf("type" to "gestureVote", "liked" to (label == "Thumb_Up")))
     }
 
     private fun hidePose() {
@@ -475,13 +618,15 @@ class MainActivity : FlutterActivity() {
     private fun renderForPresentation(image: ImageProxy) {
         var queuedFrame = false
         try {
-            if (!running || (presentation == null && !autoPlacement)) return
+            if (!running || (presentation == null && !autoPlacement && !gestureEnabled)) return
             val plane = image.planes[0]
             if (plane.pixelStride != 4 || plane.rowStride < image.width * 4) return
             val now = SystemClock.uptimeMillis()
             val infer = autoPlacement && poseTracker != null && now - lastDetectMs >= 100
+            val inferGesture = gestureEnabled && gestureTracker != null &&
+                now - lastGestureDetectMs >= 180
             val project = presentation != null && framePending.compareAndSet(false, true)
-            if (!infer && !project) return
+            if (!infer && !inferGesture && !project) return
             queuedFrame = project
             val row = ByteArray(image.width * 4)
             val packed = ByteArray(image.width * image.height * 4)
@@ -503,6 +648,12 @@ class MainActivity : FlutterActivity() {
                 lastDetectMs = now
                 try { poseTracker?.detect(frame, now) } catch (_: Exception) {
                     runOnUiThread { hidePose() }
+                }
+            }
+            if (inferGesture) {
+                lastGestureDetectMs = now
+                try { gestureTracker?.detect(frame, now) } catch (_: Exception) {
+                    runOnUiThread { failGestures("تشخیص علامت دست متوقف شد؛ از دکمه‌ها استفاده کنید") }
                 }
             }
             if (project) {
@@ -529,6 +680,11 @@ class MainActivity : FlutterActivity() {
 
     private fun stopCamera() {
         running = false
+        gestureEnabled = false
+        gestureGeneration++
+        pendingGesture?.error("STOPPED", "دوربین متوقف شد", null)
+        pendingGesture = null
+        resetGestureState()
         staleHandler.removeCallbacks(staleCheck)
         hidePose()
         cameraGeneration++
@@ -557,6 +713,8 @@ private class CustomerPresentation(context: Context, display: Display) : android
     private lateinit var scene: FrameLayout
     private lateinit var camera: ImageView
     private lateinit var overlay: ImageView
+    private lateinit var price: android.widget.TextView
+    private lateinit var feedback: android.widget.TextView
     private var placement = Placement()
     private var poseBox: TorsoBox? = null
 
@@ -570,8 +728,28 @@ private class CustomerPresentation(context: Context, display: Display) : android
             alpha = 0.78f
         }
         scene.addView(overlay)
+        price = android.widget.TextView(context).apply {
+            setTextColor(android.graphics.Color.WHITE)
+            setBackgroundColor(0xBB10131A.toInt())
+            textSize = 22f
+            textDirection = View.TEXT_DIRECTION_RTL
+            setPadding(20, 12, 20, 12)
+        }
+        scene.addView(price, FrameLayout.LayoutParams(-2, -2, android.view.Gravity.TOP or android.view.Gravity.END).apply {
+            setMargins(16, 16, 16, 16)
+        })
+        feedback = android.widget.TextView(context).apply {
+            setTextColor(android.graphics.Color.WHITE)
+            setBackgroundColor(0xBB10131A.toInt())
+            textSize = 26f
+            textDirection = View.TEXT_DIRECTION_RTL
+            setPadding(22, 14, 22, 14)
+            visibility = View.GONE
+        }
+        scene.addView(feedback, FrameLayout.LayoutParams(-2, -2,
+            android.view.Gravity.CENTER))
         val hint = android.widget.TextView(context).apply {
-            text = "پرو آزمایشی؛ جای لباس دستی است"
+            text = "شست بالا: می‌پسندم | شست پایین: نمی‌پسندم"
             setTextColor(android.graphics.Color.WHITE)
             setBackgroundColor(0x99000000.toInt())
             textSize = 18f
@@ -586,6 +764,14 @@ private class CustomerPresentation(context: Context, display: Display) : android
     fun showFrame(frame: Bitmap) { if (::camera.isInitialized) camera.setImageBitmap(frame) }
     fun clearFrame() { if (::camera.isInitialized) camera.setImageDrawable(null) }
     fun setGarment(bitmap: Bitmap?) { if (::overlay.isInitialized) overlay.setImageBitmap(bitmap) }
+    fun setPrice(text: String) { if (::price.isInitialized) {
+        price.text = text
+        price.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+    } }
+    fun setFeedback(text: String) { if (::feedback.isInitialized) {
+        feedback.text = text
+        feedback.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+    } }
     fun setPlacement(value: Placement) { poseBox = null; placement = value; updatePlacement() }
     fun setMirror(value: Boolean) { if (::overlay.isInitialized) overlay.scaleX = if (value) -1f else 1f }
     fun setPose(value: TorsoBox) { poseBox = value; setPoseVisible(true); updatePlacement() }

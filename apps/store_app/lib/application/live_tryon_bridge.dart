@@ -54,6 +54,17 @@ class LiveTryonBridge {
             (value as Map)['message'] as String? ?? 'تشخیص بدن متوقف شد.',
       );
 
+  Stream<bool> get gestureVotes => _nativeEvents
+      .where((value) => value is Map && value['type'] == 'gestureVote')
+      .map((value) => (value as Map)['liked'] == true);
+
+  Stream<String> get gestureErrors => _nativeEvents
+      .where((value) => value is Map && value['type'] == 'gestureError')
+      .map(
+        (value) =>
+            (value as Map)['message'] as String? ?? 'تشخیص علامت دست متوقف شد.',
+      );
+
   Future<void> start() async => _channel.invokeMethod<void>('start');
 
   Future<void> stop() async => _channel.invokeMethod<void>('stop');
@@ -74,6 +85,15 @@ class LiveTryonBridge {
 
   Future<void> setGarment(String? path) async =>
       _channel.invokeMethod<void>('setGarment', {'path': path});
+
+  Future<void> setPrice(String text) async =>
+      _channel.invokeMethod<void>('setPrice', {'text': text});
+
+  Future<void> setFeedback(String text) async =>
+      _channel.invokeMethod<void>('setFeedback', {'text': text});
+
+  Future<void> setGestureControl(bool enabled) async =>
+      _channel.invokeMethod<void>('setGestureControl', {'enabled': enabled});
 
   Future<void> setPlacement({
     required double centerX,

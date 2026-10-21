@@ -7,3 +7,11 @@
 - اجرا: فقط روی دستگاه، با delegate پردازندهٔ مرکزی؛ تصویر مشتری ارسال یا ذخیره نمی‌شود.
 
 وجود فایل و هش آن بررسی شده است. اجرای مدل در اپ هنوز به‌دلیل نبود NDK لازم کامپایل و روی دستگاه آزمایش نشده است.
+
+برای رأی بدون لمس، فایل `gesture_recognizer.task` کنار مدل بالا قرار دارد. [مستندات Android تشخیص ژست MediaPipe](https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer/android) برچسب‌های `Thumb_Up` و `Thumb_Down` را تعریف می‌کند. دریافت مستقیم از مخزن مدل گوگل در شبکهٔ این میزبان با خطای محدودیت مکانی مواجه شد؛ کپی فایل از [آینهٔ عمومی Hugging Face](https://huggingface.co/spaces/pollen-robotics/reachy_mini_greetings/blob/8642c979e24dcac00d3818d37b9a5c2604dd774a/reachy_mini_greetings/model/gesture_recognizer.task) گرفته شد.
+
+- اندازه: ۸٬۳۷۳٬۴۴۰ بایت
+- SHA-256: `97952348CF6A6A4915C2EA1496B4B37EBABC50CBBF80571435643C455F2B0482`
+- فقط برچسب تشخیص‌داده‌شده به Flutter منتقل می‌شود؛ فریم مشتری محلی و گذرا است.
+
+هش فایل با مقدار منتشرشدهٔ آینه برابر است. سازگاری و دقت آن روی گوشی هنوز بررسی نشده است.
