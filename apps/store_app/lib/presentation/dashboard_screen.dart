@@ -153,8 +153,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               icon: const Icon(Icons.storefront),
               label: const Text('شروع نمایش کاتالوگ'),
             ),
+            OutlinedButton.icon(
+              onPressed: () => context.push('/live-preview'),
+              icon: const Icon(Icons.videocam_outlined),
+              label: const Text('پیش‌نمایش دوربین و پروژکتور'),
+            ),
             const Text(
-              'پرو زنده و تشخیص ژست هنوز در دسترس نیست.',
+              'جای‌گذاری خودکار بدن یا تنظیم دستی آزمایشی است و هنوز روی گوشی تأیید نشده است.',
               style: TextStyle(color: Color(0xff8a5700)),
             ),
           ],

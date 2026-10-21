@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app/providers.dart';
 
@@ -8,6 +9,13 @@ void showNotice(BuildContext context, String text) {
 
 String friendlyError(Object error) {
   if (error is ArgumentError) return error.message.toString();
+  if (error is PlatformException) {
+    final message = error.message;
+    if (message != null && RegExp(r'[\u0600-\u06ff]').hasMatch(message)) {
+      return message;
+    }
+    return 'دوربین یا فایل انتخابی در دسترس نیست. دوباره تلاش کنید.';
+  }
   final text = error.toString();
   if (text.contains('این لباس') || text.contains('سرویس هوش')) return text;
   return 'عملیات انجام نشد. فضای دستگاه را بررسی کنید و دوباره تلاش کنید.';

@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../app/providers.dart';
+import '../application/live_tryon_bridge.dart';
 import '../domain/garment.dart';
 import '../domain/persian.dart';
 import 'common.dart';
@@ -275,15 +278,27 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     }
   }
 
-  Future<void> _pickPhoto(String angle) async {
+  Future<void> _pickPhoto(String angle, {bool camera = false}) async {
     if (_photoBusy) return;
     setState(() => _photoBusy = true);
+    String? temporaryCapture;
+    final captureRoot = p.normalize(
+      p.join(ref.read(assetStoreProvider).root.path, 'capture-temp'),
+    );
     try {
-      // Persist the form before leaving the activity for the native photo picker.
+      // Persist the form before leaving the activity for gallery or CameraX.
       if (!await _persist(quiet: true)) return;
-      final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
-      if (picked == null || !mounted) return;
-      final path = await ref.read(assetStoreProvider).importPhoto(picked.path);
+      final String? sourcePath;
+      if (camera) {
+        temporaryCapture = await const LiveTryonBridge().captureGarment();
+        sourcePath = temporaryCapture;
+      } else {
+        sourcePath = (await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+        ))?.path;
+      }
+      if (sourcePath == null || !mounted) return;
+      final path = await ref.read(assetStoreProvider).importPhoto(sourcePath);
       if (!mounted) return;
       _photos[angle] = path;
       _changed();
@@ -291,6 +306,16 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     } catch (e) {
       if (mounted) showNotice(context, friendlyError(e));
     } finally {
+      if (temporaryCapture != null) {
+        final candidate = p.normalize(temporaryCapture);
+        if (p.isWithin(captureRoot, candidate)) {
+          try {
+            await File(candidate).delete();
+          } on FileSystemException {
+            // Cleanup can retry on the next capture; the imported copy is safe.
+          }
+        }
+      }
       if (mounted) setState(() => _photoBusy = false);
     }
   }
@@ -503,6 +528,14 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                                         ? 'انتخاب عکس'
                                         : 'تعویض عکس',
                                   ),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: _photoBusy
+                                      ? null
+                                      : () =>
+                                            _pickPhoto(angle.key, camera: true),
+                                  icon: const Icon(Icons.photo_camera_outlined),
+                                  label: const Text('عکس با دوربین'),
                                 ),
                                 if (_photos[angle.key] != null)
                                   TextButton(
