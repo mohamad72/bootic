@@ -1,0 +1,19 @@
+# بوتیک — نسخه محلی Android
+
+این مخزن بر اساس `implementation-spec-fa.md` شروع شده است. محدوده فعلی فقط یک اپ Flutter برای بوتیک است. تصمیم‌های تغییر دامنه و وضعیت واقعی هر بسته در [`docs/implementation-plan.md`](docs/implementation-plan.md) و [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) ثبت شده‌اند.
+
+در این نسخه می‌توانید نام بوتیک را ثبت کنید، با کد ثابت `22222` وارد شوید، لباس و قیمت/موجودی/متادیتای سفارشی را نگه دارید، چهار عکس لباس را از گالری در فضای خصوصی اپ ذخیره کنید، پیش‌نویس و آرشیو بسازید و کاتالوگ را دستی به مشتری نشان دهید. ورودی کد و عدد، ارقام فارسی/عربی را هم می‌پذیرد. دیتابیس Drift/SQLite و عکس‌ها هر دو محلی هستند.
+
+دکمه تحلیل هوش مصنوعی خطای واضح می‌دهد و هیچ API را فراخوانی نمی‌کند. مرور کاتالوگ، پرو زنده نیست؛ CameraX، MediaPipe، ژست و خروجی پروژکتور هنوز آماده نیستند. اپ ادمین و سرور نداریم. کد ثابت یک قفل ساده محلی است. داده‌ها با حذف نصب یا پاک‌کردن داده برنامه حذف می‌شوند؛ بک‌آپ و همگام‌سازی وجود ندارد.
+
+برای اجرا از پوشه `apps/store_app`:
+
+```powershell
+flutter pub get
+dart run build_runner build
+flutter analyze --no-pub
+flutter test --no-pub
+flutter run -d <android-device-id>
+```
+
+ساخت APK: `flutter build apk --debug --no-pub`. روی این میزبان `flutter doctor -v` کمبود Android SDK 36 و Build Tools 28.0.3 را گزارش کرده است؛ نتیجه دقیق تلاش ساخت در فایل وضعیت ثبت می‌شود. هیچ APK انتشار با کلید ثابت تولید نشده است. فونت Vazirmatn و مجوز OFL آن در `apps/store_app/assets/fonts` قرار دارند.
