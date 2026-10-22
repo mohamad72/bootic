@@ -94,18 +94,8 @@ class _CustomerScreenState extends ConsumerState<CustomerScreen> {
                   child: const Text('تلاش دوباره'),
                 ),
               ),
-              data: (all) => _content(
-                all
-                    .where(
-                      (g) =>
-                          !g.isDraft &&
-                          g.isActive &&
-                          !g.archived &&
-                          g.stock > 0 &&
-                          g.photos['front'] != null,
-                    )
-                    .toList(),
-              ),
+              data: (all) =>
+                  _content(all.where((g) => g.tryOnEligible).toList()),
             ),
       ),
     ),

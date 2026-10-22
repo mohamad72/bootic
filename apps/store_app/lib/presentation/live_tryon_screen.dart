@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -123,21 +122,12 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     if (mounted) setState(() => _error = _message(error));
   }
 
-  List<Garment> _eligible(List<Garment>? all) => (all ?? const <Garment>[])
-      .where(
-        (g) =>
-            !g.isDraft &&
-            g.isActive &&
-            !g.archived &&
-            g.stock > 0 &&
-            g.photos['front'] != null,
-      )
-      .toList();
+  List<Garment> _eligible(List<Garment>? all) =>
+      (all ?? const <Garment>[]).where((g) => g.tryOnEligible).toList();
 
   String? _photoPath(Garment? garment) {
     if (garment == null) return null;
-    final relative = garment
-        .photos[garment.tryOnJson.trim().isNotEmpty ? 'front_source' : 'front'];
+    final relative = garment.photos['front_source'];
     if (relative == null) return null;
     try {
       return ref.read(assetStoreProvider).resolve(relative).path;
@@ -164,14 +154,11 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     await _bridge.setVotingEnabled(false);
     final render = GarmentRenderMetadata.parse(garment?.tryOnJson ?? '');
     final photo = _photoPath(garment);
-    if (garment != null && render != null && photo == null) {
+    if (garment != null && (render == null || photo == null)) {
       await _bridge.setGarment(null);
       throw StateError(
-        'عکس اصلی این لباس موجود نیست؛ عکس روبرو را در فرم لباس دوباره انتخاب کنید.',
+        'JSON معتبر یا عکس اصلی این لباس موجود نیست؛ مشخصات و عکس روبرو را در فرم لباس تکمیل کنید.',
       );
-    }
-    if (photo != null && mounted && render == null) {
-      await precacheImage(FileImage(File(photo)), context);
     }
     if (!mounted || session != _session || !_running) return;
     await _bridge.setGarment(photo, renderMetadata: render?.toNativeMap());
@@ -524,7 +511,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   Widget build(BuildContext context) {
     final available = _eligible(ref.watch(catalogProvider).value);
     final selected = available.where((g) => g.id == _garmentId).firstOrNull;
-    final photo = _photoPath(selected);
     final placement = _placement;
     final visible =
         _running &&
@@ -541,46 +527,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
           AndroidView(
             viewType: 'ir.bootic.store_app/live_scene',
             onPlatformViewCreated: (_) => unawaited(_start()),
-          ),
-        if (visible &&
-            photo != null &&
-            selected?.tryOnJson.trim().isNotEmpty != true)
-          Positioned.fill(
-            child: LayoutBuilder(
-              builder: (context, box) => Stack(
-                children: [
-                  Positioned(
-                    left:
-                        box.maxWidth *
-                        (placement!.centerX - placement.width / 2),
-                    top:
-                        box.maxHeight *
-                        (placement.centerY - placement.height / 2),
-                    width: box.maxWidth * placement.width,
-                    height: box.maxHeight * placement.height,
-                    child: IgnorePointer(
-                      child: Opacity(
-                        opacity: _debugEnabled && _debugGhost ? 0.3 : 1,
-                        child: Transform.rotate(
-                          angle: placement.rotationDegrees * math.pi / 180,
-                          child: Transform(
-                            alignment: Alignment.center,
-                            transform: Matrix4.rotationY(
-                              _frontCamera ? math.pi : 0,
-                            ),
-                            child: Image.file(
-                              File(photo),
-                              fit: BoxFit.fill,
-                              errorBuilder: (_, _, _) => const SizedBox(),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ),
         if (_debugEnabled)
           Positioned.fill(

@@ -55,6 +55,7 @@ internal data class GarmentRenderSpec(
 internal class GarmentWarp(
     private val spec: GarmentRenderSpec, private val points: List<PosePoint>,
     private val imageWidth: Int, private val imageHeight: Int, mirror: Boolean,
+    private val bodyEdges: BodyEdges? = null,
 ) {
     private val leftIndex: Int
     private val rightIndex: Int
@@ -69,8 +70,8 @@ internal class GarmentWarp(
         val swap = mirror && spec.mirrorTexture
         leftIndex = if (swap) screenRight else screenLeft
         rightIndex = if (swap) screenLeft else screenRight
-        targetLeft = pixel(leftIndex)
-        targetRight = pixel(rightIndex)
+        targetLeft = bodyEdges?.shoulder(leftIndex) ?: pixel(leftIndex)
+        targetRight = bodyEdges?.shoulder(rightIndex) ?: pixel(rightIndex)
         targetHem = (pixel(23) + pixel(24)) * 0.5f
     }
     fun torso(source: GPoint): GPoint {
@@ -88,7 +89,7 @@ internal class GarmentWarp(
         val elbowIndex = shoulderIndex + 2
         val elbow = points[elbowIndex]
         if (!elbow.finite || elbow.visibility < 0.3f || elbow.presence < 0.5f) return base
-        val start = pixel(shoulderIndex)
+        val start = bodyEdges?.shoulder(shoulderIndex) ?: pixel(shoulderIndex)
         val arm = pixel(elbowIndex) - start
         val sourceArm = sleeve.hem - sleeve.shoulder
         if (arm.length < 1f || sourceArm.length < 1f) return base

@@ -3,9 +3,10 @@ package ir.bootic.store_app
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.ClipData
+import androidx.core.content.FileProvider
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.hardware.display.DisplayManager
 import android.os.Bundle
@@ -221,8 +222,6 @@ class MainActivity : FlutterActivity() {
                     result.success(effect.durationMs)
                 }
             }
-            "removeGarmentBackground" -> GarmentCutout(this, cameraExecutor)
-                .process(call.argument<String>("path"), result)
             "setVotingEnabled" -> {
                 votingEnabled = call.argument<Boolean>("enabled") == true
                 result.success(null)
@@ -276,7 +275,7 @@ class MainActivity : FlutterActivity() {
             }
             "detachDisplay" -> { detachDisplay(); result.success(null) }
             "setGarment" -> setGarment(call, result)
-            "prepareGarmentPhoto" -> prepareGarmentPhoto(call, result)
+            "shareGarmentReference" -> shareGarmentReference(call, result)
             "setGarmentGhost" -> {
                 garmentGhost = call.argument<Boolean>("enabled") == true
                 phoneGarment?.alpha = if (garmentGhost) 0.3f else 1f
@@ -285,6 +284,7 @@ class MainActivity : FlutterActivity() {
             }
             "setPoseDebugEnabled" -> {
                 poseDebugEnabled = call.argument<Boolean>("enabled") == true
+                poseTracker?.debugEdges = poseDebugEnabled
                 lastDebugMs = 0L
                 emitPoseDebug()
                 result.success(null)
@@ -403,6 +403,7 @@ class MainActivity : FlutterActivity() {
                         try { cameraExecutor.execute { tracker.close() } } catch (_: Exception) { tracker.close() }
                     } else {
                         poseTracker = tracker
+                        tracker.debugEdges = poseDebugEnabled
                         enableAuto()
                         pendingAuto?.success(null)
                         pendingAuto = null
@@ -606,10 +607,23 @@ class MainActivity : FlutterActivity() {
         val observation = latestPose
         val phone = previewView
         val frame = observation?.personFrame
+        val edges = observation?.bodyEdges
+        fun anchor(index: Int): List<Double>? {
+            val o = observation ?: return null
+            val p = edges?.shoulder(index) ?: return null
+            return listOf((p.x/o.imageWidth).toDouble(), (p.y/o.imageHeight).toDouble())
+        }
         eventSink?.success(mapOf(
-            "type" to "poseDebug", "revision" to "pose-v4-json",
+            "type" to "poseDebug", "revision" to "pose-v5-edges",
             "version" to debugVersion,
             "frameGeometry" to frameGeometry,
+            "edgeStatus" to (edges?.status ?: "waiting"),
+            "edgeMs" to (observation?.edgeMs ?: 0L),
+            "maskWidth" to (edges?.maskWidth ?: 0), "maskHeight" to (edges?.maskHeight ?: 0),
+            "lift11" to (edges?.lift11?.toDouble() ?: 0.0), "lift12" to (edges?.lift12?.toDouble() ?: 0.0),
+            "fit11" to anchor(11), "fit12" to anchor(12),
+            "bodyContour" to edges?.contour?.map { listOf(it.x.toDouble(), it.y.toDouble()) }.orEmpty(),
+            "garmentRendered" to (renderAsset != null && poseVisible && !sceneEffect.blocksGarment),
             "reason" to (if (poseFailure.isNotEmpty()) poseFailure else observation?.reason ?: "waiting"),
             "points" to observation?.points?.map { point -> mapOf(
                 "x" to point.x.toDouble(), "y" to point.y.toDouble(),
@@ -631,7 +645,7 @@ class MainActivity : FlutterActivity() {
             "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
             "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
             "voting" to votingEnabled,
-            "renderer" to (if (renderAsset == null) "legacy" else "metadata-mesh-v1"),
+            "renderer" to (if (renderAsset == null) "legacy" else "metadata-mesh-v2"),
             "garmentWidth" to (garment?.width ?: 0), "garmentHeight" to (garment?.height ?: 0),
         ))
     }
@@ -654,23 +668,25 @@ class MainActivity : FlutterActivity() {
         return file
     }
 
-    private fun prepareGarmentPhoto(call: MethodCall, result: MethodChannel.Result) {
-        val path = call.argument<String>("path")
-        val metadata = call.argument<Map<String, Any?>>("renderMetadata")
-        cameraExecutor.execute {
-            try {
-                val file = garmentFile(path)
-                require(file.path.startsWith(File(filesDir, "garments").canonicalPath + File.separator))
-                val asset = GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(requireNotNull(metadata)))
-                val temporary = File(file.path + ".metadata.tmp")
-                try {
-                    temporary.outputStream().use { check(asset.masked.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-                    check(temporary.renameTo(file))
-                } finally { temporary.delete() }
-                runOnUiThread { result.success(null) }
-            } catch (_: Exception) {
-                runOnUiThread { result.error("BAD_METADATA_PHOTO", "عکس با مختصات JSON هماهنگ نیست؛ عکس اصلی همین لباس را انتخاب کنید", null) }
+    private fun shareGarmentReference(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val file = garmentFile(call.argument<String>("path"))
+            require(file.path.startsWith(File(filesDir, "garments").canonicalPath + File.separator))
+            val directory = File(cacheDir, "garment-reference").apply { mkdirs() }
+            directory.listFiles()?.filter { System.currentTimeMillis()-it.lastModified()>86400000L }?.forEach { it.delete() }
+            val copy = File(directory, file.name)
+            file.copyTo(copy, overwrite=true)
+            val uri = FileProvider.getUriForFile(this, "$packageName.garment_reference", copy)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newRawUri("garment", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
+            startActivity(Intent.createChooser(intent, "ارسال عکس مرجع لباس"))
+            result.success(null)
+        } catch (_: Exception) {
+            result.error("SHARE_FAILED", "اشتراک‌گذاری عکس مرجع ممکن نشد", null)
         }
     }
 
@@ -687,18 +703,8 @@ class MainActivity : FlutterActivity() {
         cameraExecutor.execute {
             try {
                 val file = garmentFile(path)
-                val asset = metadata?.let { GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(it)) }
-                val decoded = asset?.masked ?: run {
-                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeFile(file.path, options)
-                    require(options.outWidth in 64..6000 && options.outHeight in 64..6000)
-                    var sample = 1
-                    while (options.outWidth/sample > 1600 || options.outHeight/sample > 1600) sample *= 2
-                    options.inJustDecodeBounds = false
-                    options.inSampleSize = sample
-                    options.inPreferredConfig = Bitmap.Config.ARGB_8888
-                    requireNotNull(BitmapFactory.decodeFile(file.path, options))
-                }
+                val asset = GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(requireNotNull(metadata)))
+                val decoded = asset.masked
                 runOnUiThread {
                     if (generation != garmentGeneration) {
                         result.error("STALE_GARMENT", "درخواست لباس عوض شد", null)
@@ -914,6 +920,7 @@ class MainActivity : FlutterActivity() {
         applySceneEffect(EffectMode.NONE)
         running = false
         poseDebugEnabled = false
+        poseTracker?.debugEdges = false
         latestPose = null
         votingEnabled = false
         gestureEnabled = false

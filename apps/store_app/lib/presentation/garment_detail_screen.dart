@@ -152,6 +152,13 @@ class _GarmentDetailScreenState extends ConsumerState<GarmentDetailScreen> {
                   ),
                 ),
                 Chip(label: Text('${faNumber(g.stock)} عدد موجود')),
+                if (garmentAudiences[g.audience] != null)
+                  Chip(label: Text(garmentAudiences[g.audience]!)),
+                if (!g.isDraft &&
+                    !g.archived &&
+                    (g.tryOnJson.trim().isEmpty ||
+                        g.photos['front_source'] == null))
+                  const Chip(label: Text('تکمیل JSON و عکس اصلی لازم است')),
                 if (!g.isActive) const Chip(label: Text('غیرفعال')),
               ],
             ),

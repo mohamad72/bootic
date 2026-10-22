@@ -23,7 +23,7 @@ internal data class GarmentPiece(
 internal class GarmentRenderAsset(val spec: GarmentRenderSpec, val masked: Bitmap, val pieces: List<GarmentPiece>) {
     fun bounds(pose: PoseObservation, mirror: Boolean): TorsoBox? {
         if (pose.box == null) return null
-        val warp = GarmentWarp(spec, pose.points, pose.imageWidth, pose.imageHeight, mirror)
+        val warp = GarmentWarp(spec, pose.points, pose.imageWidth, pose.imageHeight, mirror, pose.bodyEdges)
         val mapped = pieces.flatMap { piece -> piece.polygon.map {
             if (piece.sleeve == null) warp.torso(it) else warp.sleeve(it, piece.sleeve)
         } }

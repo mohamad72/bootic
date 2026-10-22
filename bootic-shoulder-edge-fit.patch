@@ -1,0 +1,564 @@
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/BodyEdgeFit.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/BodyEdgeFit.kt
+new file mode 100644
+index 0000000..92cbda9
+--- /dev/null
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/BodyEdgeFit.kt
+@@ -0,0 +1,103 @@
++package ir.bootic.store_app
++
++import kotlin.math.floor
++import kotlin.math.max
++import kotlin.math.min
++
++/** Confidence mask in the SAME rotated/mirrored image coordinates as the pose.
++ * The sampler is consumed synchronously; no image/buffer escapes the callback. */
++internal class BodyMask(val width: Int, val height: Int, private val sample: (Int, Int) -> Float) {
++    fun at(x: Float, y: Float): Float {
++        if (!x.isFinite() || !y.isFinite() || x !in 0f..1f || y !in 0f..1f || width < 2 || height < 2) return Float.NaN
++        val px = (x * width - .5f).coerceIn(0f, width - 1f)
++        val py = (y * height - .5f).coerceIn(0f, height - 1f)
++        val ix = floor(px).toInt(); val iy = floor(py).toInt()
++        val dx = px-ix; val dy = py-iy
++        val a = sample(ix, iy); val b = sample(min(ix+1, width-1), iy)
++        val c = sample(ix, min(iy+1, height-1)); val d = sample(min(ix+1, width-1), min(iy+1, height-1))
++        return (a*(1-dx)+b*dx)*(1-dy)+(c*(1-dx)+d*dx)*dy
++    }
++}
++
++internal data class BodyEdges(
++    val shoulder11: GPoint? = null, val shoulder12: GPoint? = null,
++    val lift11: Float = 0f, val lift12: Float = 0f,
++    // Unconnected normalized boundary samples, NOT an invented body polygon.
++    val contour: List<GPoint> = emptyList(), val status: String = "no_boundary",
++    val maskWidth: Int = 0, val maskHeight: Int = 0,
++) {
++    fun shoulder(index: Int): GPoint? = if (index == 11) shoulder11 else shoulder12
++}
++
++/** Locate a surface seam above each joint, using image evidence, never a fixed
++ * centimetre/pixel offset. Raw landmarks remain unchanged for tracking/voting.
++ * Missing, occluded, ambiguous and out-of-frame boundaries fall back to joints. */
++internal object BodyEdgeFit {
++    fun refine(pose: PoseObservation, mask: BodyMask, includeContour: Boolean = true): BodyEdges {
++        val contour = if (includeContour) contour(mask) else emptyList()
++        fun result(status: String) = BodyEdges(contour=contour, status=status, maskWidth=mask.width, maskHeight=mask.height)
++        if (pose.box == null || pose.points.size <= 24) return result("pose_rejected")
++        fun pixel(i: Int) = GPoint(pose.points[i].x*pose.imageWidth, pose.points[i].y*pose.imageHeight)
++        val shoulderMid = (pixel(11)+pixel(12))*.5f
++        val hipMid = (pixel(23)+pixel(24))*.5f
++        val axis = hipMid-shoulderMid
++        val length = axis.length
++        if (!length.isFinite() || length < 1f) return result("pose_rejected")
++        val up = axis*(-1f/length)
++        val across = GPoint(-up.y, up.x)
++        val span = (pixel(11)-pixel(12)).length
++        // Less than three mask pixels across the search band is insufficient evidence.
++        val maskPixel = max(pose.imageWidth.toFloat()/mask.width, pose.imageHeight.toFloat()/mask.height)
++        val limit = length*.20f
++        if (limit < maskPixel*3) return result("too_small")
++        fun confidence(p: GPoint) = mask.at(p.x/pose.imageWidth, p.y/pose.imageHeight)
++        fun lift(index: Int): Float? {
++            val joint = pose.points[index]
++            if (!joint.finite || joint.visibility < .65f || joint.presence < .65f) return null
++            val origin = pixel(index)
++            val hits = mutableListOf<Float>()
++            for (ray in -2..2) {
++                val start = origin + across*(ray*span*.02f)
++                if (!(confidence(start) >= .7f)) continue
++                var crossing: Float? = null
++                var background = false
++                // Fixed sample count bounds work, while distances scale with torso size.
++                for (step in 1..40) {
++                    val distance = limit*step/40
++                    val value = confidence(start+up*distance)
++                    if (!value.isFinite()) break
++                    if (crossing == null && value <= .5f) crossing = distance
++                    if (crossing != null && value >= .7f) break // hole/noise rather than outer boundary
++                    if (crossing != null && value <= .25f) {
++                        // Require background beyond the crossing as well.
++                        background = confidence(start+up*(distance+maskPixel)) <= .25f
++                        break
++                    }
++                }
++                if (background && crossing != null) hits.add(crossing)
++            }
++            if (hits.size < 3) return null
++            hits.sort()
++            if (hits.last()-hits.first() > max(length*.045f, maskPixel*2)) return null
++            return hits[hits.size/2]
++        }
++        val a = lift(11); val b = lift(12)
++        return BodyEdges(a?.let { pixel(11)+up*it }, b?.let { pixel(12)+up*it }, a?:0f, b?:0f,
++            contour, if (a!=null && b!=null) "both" else if (a!=null || b!=null) "partial" else "no_boundary", mask.width, mask.height)
++    }
++
++    private fun contour(mask: BodyMask): List<GPoint> {
++        // Bounded diagnostic payload; no full mask crosses the Flutter channel.
++        val n=96
++        val values=Array(n+1) { y -> FloatArray(n+1) { x -> mask.at(x.toFloat()/n,y.toFloat()/n) } }
++        val points=ArrayList<GPoint>()
++        for(y in 0 until n) for(x in 0 until n) {
++            val a=values[y][x]; val b=values[y][x+1]; val c=values[y+1][x]
++            if (!a.isFinite()) continue
++            if (b.isFinite() && (a>=.5f)!=(b>=.5f)) points.add(GPoint((x+.5f)/n,y.toFloat()/n))
++            if (c.isFinite() && (a>=.5f)!=(c>=.5f)) points.add(GPoint(x.toFloat()/n,(y+.5f)/n))
++            if(points.size>=1200) return points
++        }
++        return points
++    }
++}
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentMeshView.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentMeshView.kt
+index 5943848..04726e8 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentMeshView.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentMeshView.kt
+@@ -22,7 +22,7 @@ internal class GarmentMeshView(context: Context) : View(context) {
+         val asset = asset ?: return
+         val pose = pose ?: return
+         if (pose.box == null || width <= 0 || height <= 0) return
+-        val warp = GarmentWarp(asset.spec, pose.points, pose.imageWidth, pose.imageHeight, mirrorTexture)
++        val warp = GarmentWarp(asset.spec, pose.points, pose.imageWidth, pose.imageHeight, mirrorTexture, pose.bodyEdges)
+         val scale = max(width.toFloat()/pose.imageWidth, height.toFloat()/pose.imageHeight)
+         val offsetX = (width-pose.imageWidth*scale)/2
+         val offsetY = (height-pose.imageHeight*scale)/2
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentRenderAsset.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentRenderAsset.kt
+index 57335ee..908c64a 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentRenderAsset.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentRenderAsset.kt
+@@ -23,7 +23,7 @@ internal data class GarmentPiece(
+ internal class GarmentRenderAsset(val spec: GarmentRenderSpec, val masked: Bitmap, val pieces: List<GarmentPiece>) {
+     fun bounds(pose: PoseObservation, mirror: Boolean): TorsoBox? {
+         if (pose.box == null) return null
+-        val warp = GarmentWarp(spec, pose.points, pose.imageWidth, pose.imageHeight, mirror)
++        val warp = GarmentWarp(spec, pose.points, pose.imageWidth, pose.imageHeight, mirror, pose.bodyEdges)
+         val mapped = pieces.flatMap { piece -> piece.polygon.map {
+             if (piece.sleeve == null) warp.torso(it) else warp.sleeve(it, piece.sleeve)
+         } }
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentWarp.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentWarp.kt
+index a5cd09b..8d41d2f 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentWarp.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentWarp.kt
+@@ -55,6 +55,7 @@ internal data class GarmentRenderSpec(
+ internal class GarmentWarp(
+     private val spec: GarmentRenderSpec, private val points: List<PosePoint>,
+     private val imageWidth: Int, private val imageHeight: Int, mirror: Boolean,
++    private val bodyEdges: BodyEdges? = null,
+ ) {
+     private val leftIndex: Int
+     private val rightIndex: Int
+@@ -69,8 +70,8 @@ internal class GarmentWarp(
+         val swap = mirror && spec.mirrorTexture
+         leftIndex = if (swap) screenRight else screenLeft
+         rightIndex = if (swap) screenLeft else screenRight
+-        targetLeft = pixel(leftIndex)
+-        targetRight = pixel(rightIndex)
++        targetLeft = bodyEdges?.shoulder(leftIndex) ?: pixel(leftIndex)
++        targetRight = bodyEdges?.shoulder(rightIndex) ?: pixel(rightIndex)
+         targetHem = (pixel(23) + pixel(24)) * 0.5f
+     }
+     fun torso(source: GPoint): GPoint {
+@@ -88,7 +89,7 @@ internal class GarmentWarp(
+         val elbowIndex = shoulderIndex + 2
+         val elbow = points[elbowIndex]
+         if (!elbow.finite || elbow.visibility < 0.3f || elbow.presence < 0.5f) return base
+-        val start = pixel(shoulderIndex)
++        val start = bodyEdges?.shoulder(shoulderIndex) ?: pixel(shoulderIndex)
+         val arm = pixel(elbowIndex) - start
+         val sourceArm = sleeve.hem - sleeve.shoulder
+         if (arm.length < 1f || sourceArm.length < 1f) return base
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+index 1cd7ad7..e16deec 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+@@ -285,6 +285,7 @@ class MainActivity : FlutterActivity() {
+             }
+             "setPoseDebugEnabled" -> {
+                 poseDebugEnabled = call.argument<Boolean>("enabled") == true
++                poseTracker?.debugEdges = poseDebugEnabled
+                 lastDebugMs = 0L
+                 emitPoseDebug()
+                 result.success(null)
+@@ -403,6 +404,7 @@ class MainActivity : FlutterActivity() {
+                         try { cameraExecutor.execute { tracker.close() } } catch (_: Exception) { tracker.close() }
+                     } else {
+                         poseTracker = tracker
++                        tracker.debugEdges = poseDebugEnabled
+                         enableAuto()
+                         pendingAuto?.success(null)
+                         pendingAuto = null
+@@ -606,10 +608,23 @@ class MainActivity : FlutterActivity() {
+         val observation = latestPose
+         val phone = previewView
+         val frame = observation?.personFrame
++        val edges = observation?.bodyEdges
++        fun anchor(index: Int): List<Double>? {
++            val o = observation ?: return null
++            val p = edges?.shoulder(index) ?: return null
++            return listOf((p.x/o.imageWidth).toDouble(), (p.y/o.imageHeight).toDouble())
++        }
+         eventSink?.success(mapOf(
+-            "type" to "poseDebug", "revision" to "pose-v4-json",
++            "type" to "poseDebug", "revision" to "pose-v5-edges",
+             "version" to debugVersion,
+             "frameGeometry" to frameGeometry,
++            "edgeStatus" to (edges?.status ?: "waiting"),
++            "edgeMs" to (observation?.edgeMs ?: 0L),
++            "maskWidth" to (edges?.maskWidth ?: 0), "maskHeight" to (edges?.maskHeight ?: 0),
++            "lift11" to (edges?.lift11?.toDouble() ?: 0.0), "lift12" to (edges?.lift12?.toDouble() ?: 0.0),
++            "fit11" to anchor(11), "fit12" to anchor(12),
++            "bodyContour" to edges?.contour?.map { listOf(it.x.toDouble(), it.y.toDouble()) }.orEmpty(),
++            "garmentRendered" to (renderAsset != null && poseVisible && !sceneEffect.blocksGarment),
+             "reason" to (if (poseFailure.isNotEmpty()) poseFailure else observation?.reason ?: "waiting"),
+             "points" to observation?.points?.map { point -> mapOf(
+                 "x" to point.x.toDouble(), "y" to point.y.toDouble(),
+@@ -631,7 +646,7 @@ class MainActivity : FlutterActivity() {
+             "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
+             "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
+             "voting" to votingEnabled,
+-            "renderer" to (if (renderAsset == null) "legacy" else "metadata-mesh-v1"),
++            "renderer" to (if (renderAsset == null) "legacy" else "metadata-mesh-v2"),
+             "garmentWidth" to (garment?.width ?: 0), "garmentHeight" to (garment?.height ?: 0),
+         ))
+     }
+@@ -914,6 +929,7 @@ class MainActivity : FlutterActivity() {
+         applySceneEffect(EffectMode.NONE)
+         running = false
+         poseDebugEnabled = false
++        poseTracker?.debugEdges = false
+         latestPose = null
+         votingEnabled = false
+         gestureEnabled = false
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseGeometry.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseGeometry.kt
+index 9e4d313..0abb0d6 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseGeometry.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseGeometry.kt
+@@ -37,6 +37,7 @@ internal data class PoseObservation(
+     val imageWidth: Int, val imageHeight: Int,
+     val personFrame: PersonFrame? = null,
+     val shoulderPx: Float = 0f, val torsoPx: Float = 0f,
++    val bodyEdges: BodyEdges? = null, val edgeMs: Long = 0,
+ )
+ 
+ internal object PoseGeometry {
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseTracker.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseTracker.kt
+index 4c8ec08..e11bf4f 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseTracker.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/PoseTracker.kt
+@@ -2,6 +2,9 @@ package ir.bootic.store_app
+ 
+ import android.content.Context
+ import android.graphics.Bitmap
++import android.os.SystemClock
++import java.nio.ByteOrder
++import com.google.mediapipe.framework.image.ByteBufferExtractor
+ import com.google.mediapipe.framework.image.BitmapImageBuilder
+ import com.google.mediapipe.framework.image.MPImage
+ import com.google.mediapipe.tasks.core.BaseOptions
+@@ -16,6 +19,7 @@ internal class PoseTracker(
+     private val onError: () -> Unit,
+ ) {
+     private val landmarker: PoseLandmarker
++    @Volatile var debugEdges = false
+ 
+     init {
+         val options = PoseLandmarker.PoseLandmarkerOptions.builder()
+@@ -27,6 +31,7 @@ internal class PoseTracker(
+             )
+             .setRunningMode(RunningMode.LIVE_STREAM)
+             .setNumPoses(1)
++            .setOutputSegmentationMasks(true)
+             .setMinPoseDetectionConfidence(PoseGeometry.MODEL_CONFIDENCE)
+             .setMinPosePresenceConfidence(PoseGeometry.MODEL_CONFIDENCE)
+             .setMinTrackingConfidence(PoseGeometry.MODEL_CONFIDENCE)
+@@ -34,7 +39,20 @@ internal class PoseTracker(
+                 val points = result.landmarks().firstOrNull().orEmpty().map {
+                     PosePoint(it.x(), it.y(), it.visibility().orElse(0f), it.presence().orElse(0f))
+                 }
+-                onResult(PoseGeometry.evaluate(points, image.width, image.height), result.timestampMs())
++                val raw = PoseGeometry.evaluate(points, image.width, image.height)
++                val started = SystemClock.uptimeMillis()
++                val edges = try {
++                    val mask = result.segmentationMasks().orElse(emptyList()).firstOrNull()
++                    if (mask == null) BodyEdges(status="no_mask") else {
++                        val buffer = ByteBufferExtractor.extract(mask).order(ByteOrder.nativeOrder()).asFloatBuffer()
++                        require(buffer.remaining() >= mask.width*mask.height)
++                        val offset = buffer.position()
++                        BodyEdgeFit.refine(raw, BodyMask(mask.width, mask.height) { x, y ->
++                            buffer.get(offset+y*mask.width+x)
++                        }, includeContour=debugEdges)
++                    }
++                } catch (_: Exception) { BodyEdges(status="mask_error") }
++                onResult(raw.copy(bodyEdges=edges, edgeMs=SystemClock.uptimeMillis()-started), result.timestampMs())
+             }
+             .setErrorListener { _: RuntimeException -> onError() }
+             .build()
+diff --git a/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/BodyEdgeFitTest.kt b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/BodyEdgeFitTest.kt
+new file mode 100644
+index 0000000..cbbfeca
+--- /dev/null
++++ b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/BodyEdgeFitTest.kt
+@@ -0,0 +1,91 @@
++package ir.bootic.store_app
++
++import org.junit.Assert.*
++import org.junit.Test
++
++class BodyEdgeFitTest {
++    private fun pose(width: Int = 400, height: Int = 600): PoseObservation {
++        val p = MutableList(33) { PosePoint(.5f, .5f, 1f, 1f) }
++        p[11] = PosePoint(.3f, .3f, 1f, 1f); p[12] = PosePoint(.7f, .3f, 1f, 1f)
++        p[23] = PosePoint(.35f, .75f, 1f, 1f); p[24] = PosePoint(.65f, .75f, 1f, 1f)
++        return PoseGeometry.evaluate(p, width, height)
++    }
++    private fun mask(value: (Float, Float) -> Float) = BodyMask(200, 300) { x, y -> value((x+.5f)/200, (y+.5f)/300) }
++    private fun silhouette() = mask { x,y -> if (x in .2f.. .8f && y in .24f.. .9f) 1f else 0f }
++    @Test fun shoulderSeamFindsSurfaceInsteadOfJointCentre() {
++        val fit = BodyEdgeFit.refine(pose(), silhouette())
++        assertEquals(.24f, fit.shoulder11!!.y/600, .008f)
++        assertEquals(.24f, fit.shoulder12!!.y/600, .008f)
++        assertTrue(fit.contour.isNotEmpty())
++    }
++    @Test fun correctionScalesWithBodyNotFixedPixels() {
++        val a = BodyEdgeFit.refine(pose(), silhouette())
++        val b = BodyEdgeFit.refine(pose(800,1200), silhouette())
++        assertEquals(a.lift11*2, b.lift11, .01f)
++    }
++    @Test fun frontCameraReflectionKeepsCorrectAnatomicalSide() {
++        val p = pose(); val reflected = p.copy(points=p.points.map { it.copy(x=1-it.x) })
++        val a = BodyEdgeFit.refine(p, silhouette()); val b = BodyEdgeFit.refine(reflected, silhouette())
++        assertEquals(400-a.shoulder11!!.x, b.shoulder11!!.x, .01f)
++        assertEquals(a.shoulder11.y, b.shoulder11.y, .01f)
++    }
++    @Test fun noConfidentBoundaryLeavesPoseUntouched() {
++        for (value in listOf(0f, .5f, 1f, Float.NaN)) {
++            val fit = BodyEdgeFit.refine(pose(), mask { _,_->value })
++            assertNull(fit.shoulder11); assertNull(fit.shoulder12)
++            assertEquals(0f, fit.lift11, 0f)
++        }
++    }
++    @Test fun distantBoundaryDoesNotPullClothingToHead() {
++        val fit = BodyEdgeFit.refine(pose(), mask { _,y -> if(y>.05f) 1f else 0f })
++        assertNull(fit.shoulder11); assertNull(fit.shoulder12)
++    }
++    @Test fun rejectedOrOccludedPoseIsNotCorrected() {
++        val p=pose()
++        assertNull(BodyEdgeFit.refine(p.copy(box=null), silhouette()).shoulder11)
++        val points=p.points.toMutableList(); points[11]=points[11].copy(visibility=.4f)
++        val fit=BodyEdgeFit.refine(p.copy(points=points), silhouette())
++        assertNull(fit.shoulder11); assertNotNull(fit.shoulder12)
++    }
++    @Test fun tiltedBodySearchesAlongTorsoAxis() {
++        val p=pose(); val angle=.25f
++        val c=kotlin.math.cos(angle); val s=kotlin.math.sin(angle)
++        fun rotate(x:Float,y:Float)=GPoint(200+(x-200)*c-(y-300)*s,300+(x-200)*s+(y-300)*c)
++        val tilted=p.copy(points=p.points.map { val q=rotate(it.x*400,it.y*600);it.copy(x=q.x/400,y=q.y/600) })
++        val m=mask { x,y ->
++            val dx=x*400-200;val dy=y*600-300
++            val ox=(200+dx*c+dy*s)/400;val oy=(300-dx*s+dy*c)/600
++            if(ox in .2f.. .8f && oy in .24f.. .9f) 1f else 0f
++        }
++        val fit=BodyEdgeFit.refine(tilted,m);val expected=rotate(120f,144f)
++        assertNotNull(fit.shoulder11)
++        assertTrue((fit.shoulder11!!-expected).length<5f)
++    }
++    @Test fun nearAndFarBodiesUseObservedEdgeInTheirOwnScale() {
++        val p=pose()
++        for (scale in listOf(.35f,.6f,1f)) {
++            val scaled=p.copy(points=p.points.map { it.copy(x=.5f+(it.x-.5f)*scale,y=.5f+(it.y-.5f)*scale) })
++            val m=mask { x,y ->
++                val ox=.5f+(x-.5f)/scale; val oy=.5f+(y-.5f)/scale
++                if(ox in .2f.. .8f && oy in .24f.. .9f) 1f else 0f
++            }
++            val fit=BodyEdgeFit.refine(scaled,m)
++            assertNotNull(fit.shoulder11)
++            assertEquals(.5f+(.24f-.5f)*scale,fit.shoulder11!!.y/600,.009f)
++        }
++    }
++    @Test fun differentShoulderWidthsAndTorsoLengthsDoNotUseOneBodyTemplate() {
++        for (halfWidth in listOf(.12f,.2f,.28f)) for(hipY in listOf(.6f,.75f,.85f)) {
++            val p=pose();val points=p.points.toMutableList()
++            points[11]=points[11].copy(x=.5f-halfWidth)
++            points[12]=points[12].copy(x=.5f+halfWidth)
++            points[23]=points[23].copy(y=hipY);points[24]=points[24].copy(y=hipY)
++            val top=.3f-(hipY-.3f)*.12f
++            val m=mask { x,y -> if(x in (.5f-halfWidth-.06f)..(.5f+halfWidth+.06f) && y in top.. .95f) 1f else 0f }
++            val fit=BodyEdgeFit.refine(p.copy(points=points),m)
++            assertNotNull(fit.shoulder11)
++            assertEquals(top,fit.shoulder11!!.y/600,.008f)
++        }
++    }
++
++}
+diff --git a/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/GarmentWarpTest.kt b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/GarmentWarpTest.kt
+index 6b80093..3fb845a 100644
+--- a/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/GarmentWarpTest.kt
++++ b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/GarmentWarpTest.kt
+@@ -41,4 +41,16 @@ class GarmentWarpTest {
+         val warp = GarmentWarp(spec, p, 480, 640, false)
+         same(warp.torso(sleeve.hem), warp.sleeve(sleeve.hem, sleeve))
+     }
++    @Test fun surfaceAnchorsDriveBothTorsoAndSleeveWithoutMovingHips() {
++        val edges = BodyEdges(shoulder11=GPoint(336f,140f), shoulder12=GPoint(144f,108f))
++        val warp=GarmentWarp(spec,points(),480,640,false,edges)
++        same(edges.shoulder12!!,warp.torso(spec.leftShoulder))
++        same(edges.shoulder11!!,warp.torso(spec.rightShoulder))
++        same(GPoint(240f,448f),warp.torso(spec.hem))
++        same(warp.torso(sleeve.shoulder),warp.sleeve(sleeve.shoulder,sleeve))
++        same(warp.torso(sleeve.armpit),warp.sleeve(sleeve.armpit,sleeve))
++        val mirrored=GarmentWarp(spec,points(),480,640,true,edges)
++        same(edges.shoulder11,mirrored.torso(spec.leftShoulder))
++    }
++
+ }
+diff --git a/apps/store_app/lib/presentation/tryon_debug_overlay.dart b/apps/store_app/lib/presentation/tryon_debug_overlay.dart
+index 70a5708..d1715fa 100644
+--- a/apps/store_app/lib/presentation/tryon_debug_overlay.dart
++++ b/apps/store_app/lib/presentation/tryon_debug_overlay.dart
+@@ -49,8 +49,22 @@ class TryonDebugOverlay extends StatelessWidget {
+       }
+ 
+       final p = placement;
++      final camera = d == null ? '—' : (d.flag('front') ? 'جلو' : 'عقب');
++      const edgeStates = {
++        'both': 'هر دو شانه',
++        'partial': 'یک شانه',
++        'no_boundary': 'مرز مطمئن نیست؛ اتصال به مفصل',
++        'no_mask': 'ماسک نرسیده',
++        'mask_error': 'خطای ماسک',
++        'too_small': 'بدن برای اصلاح لبه کوچک است',
++        'pose_rejected': 'بدن پذیرفته نشده',
++      };
++      final edgeLine =
++          'لبه: ${edgeStates[d?.text('edgeStatus')] ?? 'در انتظار'}';
++      final liftLine =
++          'اصلاح شانه ۱۱/۱۲: ${n('lift11', 1)} / ${n('lift12', 1)} px';
+       final lines = [
+-        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v4-json'}',
++        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v5-edges'}',
+         'تشخیص: ${_reasons[d?.text('reason')] ?? 'در انتظار اطلاعات'}',
+         'تازگی: ${d?.fresh == true ? 'تازه' : 'قدیمی / بدون خروجی'} | عمر خروجی: ${n('resultAgeMs')} ms',
+         'سرعت خروجی مدل: ${n('fps', 1)} fps | تأخیر: ${n('latencyMs')} ms',
+@@ -64,14 +78,18 @@ class TryonDebugOverlay extends StatelessWidget {
+         confidence(12, 'شانهٔ راست، نقطهٔ ۱۲'),
+         confidence(23, 'لگن چپ، نقطهٔ ۲۳'),
+         confidence(24, 'لگن راست، نقطهٔ ۲۴'),
+-        'دوربین: ${d?.flag('front') == true ? 'جلو' : 'عقب'} | آینه: ${d?.flag('mirror') == true ? 'بله' : 'خیر'}',
++        'دوربین: $camera | آینه: ${d?.flag('mirror') == true ? 'بله' : 'خیر'}',
+         'مرحله: $stage | افکت: ${d?.text('effect') ?? '—'}',
+         'علامت دست: ${d?.text('gesture') ?? '—'} | رأی‌گیری: ${d?.flag('voting') == true ? 'فعال' : 'غیرفعال'}',
+         'لباس: $garment | عکس: ${n('garmentWidth')}×${n('garmentHeight')} px',
+-        'راهنما: سبز = نقاط مطمئن؛ قرمز = ضعیف؛ آبی = محدودهٔ نقاط؛ نارنجی = کادر لباس.',
++        edgeLine,
++        liftLine,
++        'ماسک بدن: ${n('maskWidth')}×${n('maskHeight')} | استخراج لبه: ${n('edgeMs')} ms',
++        'راهنما: سبز = مفاصل؛ صورتی = مرز ماسک بدن؛ زرد = اتصال اصلاح‌شدهٔ شانه؛ آبی = محدودهٔ نقاط.',
++        'نارنجی: ${d?.flag('garmentRendered') == true ? 'محدودهٔ تقریبی لباس فعال' : 'کادر راهنمای تنه؛ لباس JSON فعال نیست'}',
+         'رندر لباس: ${d?.text('renderer') ?? '—'}',
+         'کادر ورودی مشترک: ${d?.text('frameGeometry') ?? '—'}',
+-        'توضیح: خطوط، تخمین نقاط بدن هستند، نه لبهٔ دقیق پوست. اندازهٔ سانتی‌متری بدون کالیبراسیون نداریم.',
++        'توضیح: مرز صورتی تخمین بدن و لباس فعلی است، نه پوست زیر لباس. اندازهٔ سانتی‌متری بدون کالیبراسیون نداریم.',
+         'اطمینان: مقدار V احتمال دیده‌شدن نقطه و مقدار P احتمال حضور آن است.',
+       ];
+       return Stack(
+@@ -100,9 +118,9 @@ class TryonDebugOverlay extends StatelessWidget {
+                   children: [
+                     Row(
+                       children: [
+-                        const Expanded(
++                        Expanded(
+                           child: Text(
+-                            'دیباگ بدن',
++                            'دیباگ بدن · دوربین $camera',
+                             style: TextStyle(
+                               color: Colors.cyanAccent,
+                               fontSize: 12,
+@@ -129,7 +147,14 @@ class TryonDebugOverlay extends StatelessWidget {
+                     for (final line
+                         in expanded
+                             ? lines
+-                            : [lines[0], lines[1], lines[6], lines[3]])
++                            : [
++                                lines[0],
++                                lines[1],
++                                lines[6],
++                                edgeLine,
++                                liftLine,
++                                lines[3],
++                              ])
+                       Text(
+                         line,
+                         textDirection: TextDirection.rtl,
+@@ -196,6 +221,34 @@ class _PoseDebugPainter extends CustomPainter {
+         return Offset(x, y);
+       }
+ 
++      // Segmentation samples share exactly the same FILL_CENTER transform.
++      Offset? extraPoint(Object? value) {
++        if (value is! List ||
++            value.length != 2 ||
++            value[0] is! num ||
++            value[1] is! num)
++          return null;
++        final x = (value[0] as num).toDouble();
++        final y = (value[1] as num).toDouble();
++        if (!x.isFinite || !y.isFinite) return null;
++        return position(PoseDebugPoint(x, y, 1, 1));
++      }
++
++      final contour = d.values['bodyContour'];
++      if (contour is List) {
++        final dots = Paint()..color = Colors.pinkAccent;
++        for (final value in contour) {
++          final point = extraPoint(value);
++          if (point != null) canvas.drawCircle(point, 1.2, dots);
++        }
++      }
++      for (final index in [11, 12]) {
++        final fit = extraPoint(d.values['fit$index']);
++        if (fit == null || d.points.length <= index) continue;
++        paint.color = Colors.yellowAccent;
++        canvas.drawLine(position(d.points[index]), fit, paint);
++        canvas.drawCircle(fit, 6, paint);
++      }
+       for (final (a, b) in connections) {
+         if (d.points.length <= b || !d.points[a].valid || !d.points[b].valid)
+           continue;
+diff --git a/docs/shoulder-edge-fit.md b/docs/shoulder-edge-fit.md
+new file mode 100644
+index 0000000..4d7adc6
+--- /dev/null
++++ b/docs/shoulder-edge-fit.md
+@@ -0,0 +1,34 @@
++# اصلاح اتصال شانه و دیباگ لبه — pose-v5-edges
++
++این پچ **افزایشی** است و بعد از پچ JSON نصب می‌شود؛ شامل اصلاحات دوربین یا فرم لباسِ قبلی نیست.
++
++```sh
++git apply --check ./bootic-shoulder-edge-fit.patch
++git apply ./bootic-shoulder-edge-fit.patch
++```
++
++فقط اگر دستور اول موفق بود دستور دوم را اجرا کنید. روی نسخهٔ دقیق حاصل از
++`bootic-garment-json-after-camera.patch` (و پچ تجمعی JSON قبلی) ساخته شده است.
++
++## رفتار
++
++- نقاط خام مفاصل MediaPipe و پذیرش بدن تغییر نمی‌کنند. نقاط بالای لباس JSON از مرز نزدیک شانه استفاده می‌کنند؛ لگن در همان محل می‌ماند.
++- ماسک بدن از همان PoseLandmarker و همان فریمِ چرخیده/آینه‌شده گرفته می‌شود. مدل، سرویس یا تماس شبکهٔ جدیدی اضافه نشده است. این ماسکِ بدن مشتری است و ارتباطی به سرویس حذف پس‌زمینهٔ عکس لباس ندارد.
++- در هر شانه پنج مسیر در جهت بالای تنه بررسی می‌شود. حداقل سه مسیر باید مرز روشن پیش‌زمینه/پس‌زمینه و نتیجهٔ سازگار بدهند. شانهٔ کم‌اطمینان، مرز بیرون کادر، بدن خیلی کوچک یا ماسک نامعتبر باعث بازگشت به اتصال قبلی می‌شود.
++- محدودهٔ جست‌وجو حداکثر ۲۰٪ طول تنه است؛ این سقف محافظتی است، نه جابه‌جایی ثابت. مقدار واقعی از ماسک می‌آید. هیچ عدد سانتی‌متری، تصویر یا اندازهٔ شخصی برای تنظیم مدل استفاده نشده و هیچ آموزشی انجام نشده است.
++- رندر JSON روی گوشی و نمایشگر خارجی از نقاط اصلاح‌شده استفاده می‌کند. مسیر قدیمیِ بدون JSON تغییری در فیت ندارد.
++- رفتار لایک، پایان نمایش لباس‌ها و زمان‌بندی افکت‌ها تغییری ندارد.
++
++## دیباگ و تست گوشی
++
++عنوان همیشه دوربین جلو/عقب را نشان می‌دهد. رنگ سبز مفاصل خام، صورتی نمونه‌های مرز ماسک بدن، زرد محل اتصال اصلاح‌شدهٔ شانه است. خط زرد فاصلهٔ مفصل تا اتصال را نشان می‌دهد. صورتی تخمین سطح بدن و لباس پوشیده‌شده است، نه پوست پنهان زیر لباس و نه بازسازی سه‌بعدی.
++
++اعداد «اصلاح شانه ۱۱/۱۲» فاصله در پیکسلِ تصویر مدل هستند، نه سانتی‌متر و نه پیکسل اسکرین‌شات. «لبه: هر دو شانه/یک شانه» یعنی اصلاح فعال شده؛ «مرز مطمئن نیست» یعنی اتصال قبلی حفظ شده است. جزئیات بازشونده اندازهٔ ماسک و زمان استخراج لبه را هم دارند. FPS و تأخیر کل برای بررسی هزینهٔ خروجی ماسک مهم‌اند؛ روی گوشی هنوز اندازه‌گیری نشده است.
++
++برای ارزیابی، از جلو و عقب، نزدیک و دور، ابتدا بدون لباس مجازی مثل عکس‌های فعلی و سپس با لباس مجازیِ نیمه‌شفاف عکس بگیرید. گردن و شانه در عکس پوشیده از پنل نباشد؛ جزئیات را در صورت لزوم جمع کنید. زاویهٔ سه‌رخ و یک نفر دیگر برای سنجش تعمیم مفید است. عدد FPS، حالت دوربین، وضعیت لبه و اصلاح شانه را در عکس نگه دارید.
++
++ماسک فقط داخل callback مصرف می‌شود. نقاط مرز با سقف ۱۲۰۰ نمونه فقط در حالت دیباگ تولید و ارسال می‌شوند؛ فریم/ماسک کامل ذخیره یا به Flutter ارسال نمی‌شود. فعال کردن خروجی ماسک ممکن است هزینهٔ پردازشی اضافه کند؛ این نسخه تضمین افزایش سرعت یا حذف کامل خطای فیت نیست.
++
++## اعتبارسنجی این پچ
++
++تست‌های JVM شامل اصلاح مرز، نبود مرز، پوشیدگی، چرخش، آینه، فاصله، اندازه‌های مختلف تنه، اتصال آستین و ثابت ماندن لگن است. کامپایل کلاس‌های رندر و PoseTracker با API واقعی MediaPipe 1.0.0 انجام شده است. بیلد کامل Flutter/APK و تست روی گوشی در محیط حاضر انجام نشده است.

@@ -22,7 +22,7 @@ internal class GarmentMeshView(context: Context) : View(context) {
         val asset = asset ?: return
         val pose = pose ?: return
         if (pose.box == null || width <= 0 || height <= 0) return
-        val warp = GarmentWarp(asset.spec, pose.points, pose.imageWidth, pose.imageHeight, mirrorTexture)
+        val warp = GarmentWarp(asset.spec, pose.points, pose.imageWidth, pose.imageHeight, mirrorTexture, pose.bodyEdges)
         val scale = max(width.toFloat()/pose.imageWidth, height.toFloat()/pose.imageHeight)
         val offsetX = (width-pose.imageWidth*scale)/2
         val offsetY = (height-pose.imageHeight*scale)/2

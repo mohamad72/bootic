@@ -41,4 +41,16 @@ class GarmentWarpTest {
         val warp = GarmentWarp(spec, p, 480, 640, false)
         same(warp.torso(sleeve.hem), warp.sleeve(sleeve.hem, sleeve))
     }
+    @Test fun surfaceAnchorsDriveBothTorsoAndSleeveWithoutMovingHips() {
+        val edges = BodyEdges(shoulder11=GPoint(336f,140f), shoulder12=GPoint(144f,108f))
+        val warp=GarmentWarp(spec,points(),480,640,false,edges)
+        same(edges.shoulder12!!,warp.torso(spec.leftShoulder))
+        same(edges.shoulder11!!,warp.torso(spec.rightShoulder))
+        same(GPoint(240f,448f),warp.torso(spec.hem))
+        same(warp.torso(sleeve.shoulder),warp.sleeve(sleeve.shoulder,sleeve))
+        same(warp.torso(sleeve.armpit),warp.sleeve(sleeve.armpit,sleeve))
+        val mirrored=GarmentWarp(spec,points(),480,640,true,edges)
+        same(edges.shoulder11,mirrored.torso(spec.leftShoulder))
+    }
+
 }

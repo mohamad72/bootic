@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +11,9 @@ import 'package:uuid/uuid.dart';
 import '../app/providers.dart';
 import '../application/live_tryon_bridge.dart';
 import '../domain/garment.dart';
+import '../domain/field_definition.dart';
+import '../domain/garment_ai_import.dart';
+import '../domain/garment_ai_prompt.dart';
 import '../domain/garment_render_metadata.dart';
 import '../domain/persian.dart';
 import 'common.dart';
@@ -32,7 +37,12 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       _sku = TextEditingController(),
       _barcode = TextEditingController();
   final _chest = TextEditingController(), _length = TextEditingController();
-  final _renderJson = TextEditingController();
+  final _renderJson = TextEditingController(),
+      _aiResponse = TextEditingController();
+  String? _aiError;
+  bool _aiBusy = false, _categoryKnown = false;
+  int _importGeneration = 0;
+  String _audience = '';
   Garment? _item;
   String? _loadError;
   String _category = 'top';
@@ -72,7 +82,12 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       _chest.text = item.measurements['chest']?.toString() ?? '';
       _length.text = item.measurements['length']?.toString() ?? '';
       _renderJson.text = item.tryOnJson;
+      _aiResponse.text = item.aiImportJson;
+      _audience = garmentAudiences.containsKey(item.audience)
+          ? item.audience
+          : '';
       _category = item.category;
+      _categoryKnown = widget.id != null;
       _active = item.isActive;
       _metadata.addAll(item.metadata);
       _photos.addAll(item.photos);
@@ -97,6 +112,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       _chest,
       _length,
       _renderJson,
+      _aiResponse,
     ]) {
       c.dispose();
     }
@@ -188,9 +204,11 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
               sku: _sku.text.trim(),
               barcode: asciiDigits(_barcode.text.trim()),
               category: _category,
+              audience: _audience,
               isActive: _active,
               isDraft: draft ?? _item!.isDraft,
               tryOnJson: _renderJson.text,
+              aiImportJson: _aiResponse.text,
               metadata: Map.of(_metadata),
               photos: Map.of(_photos),
               measurements: measures,
@@ -293,75 +311,209 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     }
   }
 
-  Future<String> _importCutout(
-    String source, {
-    GarmentRenderMetadata? render,
-  }) async {
-    final store = ref.read(assetStoreProvider);
-    final relative = await store.importPhoto(source);
+  Future<(int, int)> _referenceSize(String relative) async {
+    final file = ref.read(assetStoreProvider).resolve(relative);
+    final buffer = await ui.ImmutableBuffer.fromFilePath(file.path);
     try {
-      if (Platform.isAndroid) {
-        if (render != null) {
-          await const LiveTryonBridge().prepareGarmentPhoto(
-            store.resolve(relative).path,
-            render.toNativeMap(),
-          );
-        } else {
-          await const LiveTryonBridge().removeGarmentBackground(
-            store.resolve(relative).path,
-          );
-        }
+      final image = await ui.ImageDescriptor.encoded(buffer);
+      try {
+        return (image.width, image.height);
+      } finally {
+        image.dispose();
       }
-      return relative;
-    } catch (_) {
-      await store.resolve(relative).delete();
-      rethrow;
+    } finally {
+      buffer.dispose();
     }
   }
 
-  Future<void> _removeBackground(String angle) async {
-    final source =
-        _photos[angle == 'front' ? 'front_source' : angle] ?? _photos[angle];
-    if (_photoBusy || source == null) return;
-    setState(() => _photoBusy = true);
+  List<FieldDefinition> _aiFields() =>
+      (ref.read(fieldsProvider).asData?.value ?? <FieldDefinition>[])
+          .where((f) => f.enabled && !_excluded.contains(f.key))
+          .toList();
+
+  Future<void> _copyAiPrompt() async {
+    final reference = _photos['front_source'];
+    if (reference == null) {
+      showNotice(context, 'ابتدا عکس اصلی روبرو را انتخاب کنید');
+      return;
+    }
+    setState(() => _aiBusy = true);
     try {
-      // Work on a fresh copy; keep the previous photo if segmentation fails.
-      final relative = await _importCutout(
-        ref.read(assetStoreProvider).resolve(source).path,
-        render: angle == 'front'
-            ? GarmentRenderMetadata.parse(_renderJson.text)
-            : null,
+      final (width, height) = await _referenceSize(reference);
+      if (!mounted || _photos['front_source'] != reference) return;
+      final prompt = GarmentAiPrompt.build(
+        photoId: p.basename(reference),
+        width: width,
+        height: height,
+        fields: _aiFields(),
+        knownValues: {
+          'name': _name.text.trim().isEmpty ? null : _name.text.trim(),
+          'category': _categoryKnown ? _category : null,
+          'audience': _audience.isEmpty ? null : _audience,
+          'price': parseWhole(_price.text),
+          'discountPrice': parseWhole(_discount.text),
+          'stock': parseWhole(_stock.text),
+          'isActive': _active,
+          'collection': _collection.text.trim().isEmpty
+              ? null
+              : _collection.text.trim(),
+          'sku': _sku.text.trim().isEmpty ? null : _sku.text.trim(),
+          'barcode': _barcode.text.trim().isEmpty
+              ? null
+              : asciiDigits(_barcode.text.trim()),
+          'metadata': {for (final f in _aiFields()) f.key: _metadata[f.key]},
+          'measurements_mm': {
+            'chest': double.tryParse(
+              asciiDigits(_chest.text).replaceAll('٫', '.'),
+            ),
+            'length': double.tryParse(
+              asciiDigits(_length.text).replaceAll('٫', '.'),
+            ),
+          },
+        },
       );
-      if (!mounted) return;
-      _photos[angle] = relative;
-      _changed();
-      await _persist(quiet: true);
-    } catch (error) {
-      if (mounted) showNotice(context, friendlyError(error));
+      await Clipboard.setData(ClipboardData(text: prompt));
+      if (mounted)
+        showNotice(
+          context,
+          'پرامپت کپی شد؛ آن را همراه عکس مرجع به هوش مصنوعی بدهید',
+        );
+    } catch (e) {
+      if (mounted) showNotice(context, friendlyError(e));
     } finally {
-      if (mounted) setState(() => _photoBusy = false);
+      if (mounted) setState(() => _aiBusy = false);
+    }
+  }
+
+  Future<void> _shareReference() async {
+    final reference = _photos['front_source'];
+    if (reference == null) return;
+    try {
+      await const LiveTryonBridge().shareGarmentReference(
+        ref.read(assetStoreProvider).resolve(reference).path,
+      );
+    } catch (e) {
+      if (mounted) showNotice(context, friendlyError(e));
+    }
+  }
+
+  Future<void> _applyAiResponse() async {
+    final reference = _photos['front_source'];
+    if (reference == null) {
+      showNotice(context, 'ابتدا عکس اصلی روبرو را انتخاب کنید');
+      return;
+    }
+    _timer?.cancel();
+    setState(() {
+      _aiBusy = true;
+      _aiError = null;
+    });
+    try {
+      await _tail;
+      if (!mounted) return;
+      final text = _aiResponse.text;
+      final (width, height) = await _referenceSize(reference);
+      if (!mounted || _photos['front_source'] != reference) return;
+      final response = GarmentAiImport.parse(
+        text,
+        photoId: p.basename(reference),
+        width: width,
+        height: height,
+        fields: _aiFields(),
+      );
+      // Snapshot the latest manual edits. Unknown AI values leave controllers alone.
+      final current = _item!.copyWith(
+        name: _name.text.trim().isEmpty ? 'پیش‌نویس لباس' : _name.text.trim(),
+        category: _category,
+        audience: _audience,
+        price: parseWhole(_price.text),
+        stock: parseWhole(_stock.text),
+        discountPrice: parseWhole(_discount.text),
+        clearDiscount: _discount.text.trim().isEmpty,
+        collection: _collection.text,
+        sku: _sku.text,
+        barcode: _barcode.text,
+        isActive: _active,
+        metadata: _metadata,
+        photos: _photos,
+        measurements: {
+          ..._item!.measurements,
+          if (_measurement(_chest.text) == null &&
+              _chest.text.trim().isNotEmpty)
+            'chest': double.parse(
+              asciiDigits(_chest.text).replaceAll('٫', '.'),
+            ),
+          if (_measurement(_length.text) == null &&
+              _length.text.trim().isNotEmpty)
+            'length': double.parse(
+              asciiDigits(_length.text).replaceAll('٫', '.'),
+            ),
+        },
+      );
+      final imported = response.applyTo(current);
+      // Everything above must validate before a single form value changes.
+      final values = response.values;
+      for (final entry in <String, TextEditingController>{
+        'name': _name,
+        'collection': _collection,
+        'sku': _sku,
+        'barcode': _barcode,
+        'price': _price,
+        'discountPrice': _discount,
+        'stock': _stock,
+      }.entries) {
+        if (values[entry.key] != null)
+          entry.value.text = values[entry.key].toString();
+      }
+      _category = imported.category;
+      if (values['category'] != null) _categoryKnown = true;
+      _audience = imported.audience;
+      _active = imported.isActive;
+      _metadata
+        ..clear()
+        ..addAll(imported.metadata);
+      final measurements = values['measurements_mm'] as Map;
+      if (measurements['chest'] != null)
+        _chest.text = measurements['chest'].toString();
+      if (measurements['length'] != null)
+        _length.text = measurements['length'].toString();
+      _renderJson.text = response.renderJson;
+      _aiResponse.text = response.sourceJson;
+      _item = _item!.copyWith(isDraft: true);
+      _importGeneration++;
+      _changed();
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      await _persist(draft: true, quiet: true);
+      if (mounted)
+        showNotice(
+          context,
+          'پاسخ اعمال شد؛ مشخصات را بررسی کنید و سپس ثبت در کاتالوگ را بزنید',
+        );
+    } on FormatException catch (e) {
+      if (mounted) setState(() => _aiError = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _aiError = friendlyError(e));
+    } finally {
+      if (mounted) {
+        setState(() => _aiBusy = false);
+        if (_dirty) _scheduleAutosave();
+      }
     }
   }
 
   Future<void> _pickPhoto(String angle, {bool camera = false}) async {
-    if (_photoBusy) return;
+    if (_photoBusy || _aiBusy) return;
     setState(() => _photoBusy = true);
     String? temporaryCapture;
     final captureRoot = p.normalize(
       p.join(ref.read(assetStoreProvider).root.path, 'capture-temp'),
     );
     try {
-      // Persist the form before leaving the activity for gallery or CameraX.
-      // An old published photo may have lost its original canvas. Let the user
-      // replace that photo before validating the new JSON/reference pair.
-      final repairingReference =
-          angle == 'front' &&
-          _renderJson.text.trim().isNotEmpty &&
-          _photos['front_source'] == null;
-      if (repairingReference) {
-        _timer?.cancel();
-      } else if (!await _persist(quiet: true))
-        return;
+      // Best-effort save must not prevent repairing a missing photo/JSON pair.
+      _timer?.cancel();
+      await _persist(quiet: true);
+      if (!mounted) return;
       final String? sourcePath;
       if (camera) {
         temporaryCapture = await const LiveTryonBridge().captureGarment();
@@ -373,25 +525,17 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       }
       if (sourcePath == null || !mounted) return;
       final store = ref.read(assetStoreProvider);
-      // Keep the untrimmed, orientation-normalized canvas for source-pixel JSON.
-      final original = angle == 'front'
-          ? await store.importPhoto(sourcePath)
-          : null;
-      String path;
-      try {
-        path = await _importCutout(
-          sourcePath,
-          render: angle == 'front'
-              ? GarmentRenderMetadata.parse(_renderJson.text)
-              : null,
-        );
-      } catch (_) {
-        if (original != null) await store.resolve(original).delete();
-        rethrow;
-      }
+      // One untrimmed, orientation-normalized original. No segmentation service.
+      final original = await store.importPhoto(sourcePath);
       if (!mounted) return;
-      _photos[angle] = path;
-      if (original != null) _photos['front_source'] = original;
+      _photos[angle] = original;
+      if (angle == 'front') {
+        _photos['front_source'] = original;
+        _renderJson.clear();
+        _aiResponse.clear();
+        _aiError = null;
+        _item = _item!.copyWith(isDraft: true);
+      }
       _changed();
       await _persist(quiet: true);
     } catch (e) {
@@ -448,7 +592,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                 Expanded(
                   child: OutlinedButton(
                     key: const Key('save-draft'),
-                    onPressed: _busy || _photoBusy || !fields.hasValue
+                    onPressed:
+                        _busy || _photoBusy || _aiBusy || !fields.hasValue
                         ? null
                         : () => _finish(true),
                     child: const Text('ذخیره پیش‌نویس'),
@@ -457,7 +602,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton(
-                    onPressed: _busy || _photoBusy || !fields.hasValue
+                    onPressed:
+                        _busy || _photoBusy || _aiBusy || !fields.hasValue
                         ? null
                         : () => _finish(false),
                     child: const Text('ثبت در کاتالوگ'),
@@ -500,6 +646,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                         onChanged: (_) => _changed(),
                       ),
                       DropdownButtonFormField<String>(
+                        key: ValueKey('category-$_importGeneration'),
                         initialValue: _category,
                         decoration: const InputDecoration(
                           labelText: 'دسته لباس',
@@ -514,6 +661,29 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                             .toList(),
                         onChanged: (v) {
                           _category = v!;
+                          _categoryKnown = true;
+                          _changed();
+                        },
+                      ),
+                      DropdownButtonFormField<String>(
+                        key: ValueKey('audience-$_importGeneration'),
+                        initialValue: _audience,
+                        decoration: const InputDecoration(
+                          labelText: 'گروه لباس',
+                        ),
+                        items: [
+                          const DropdownMenuItem(
+                            value: '',
+                            child: Text('نامشخص'),
+                          ),
+                          for (final e in garmentAudiences.entries)
+                            DropdownMenuItem(
+                              value: e.key,
+                              child: Text(e.value),
+                            ),
+                        ],
+                        onChanged: (v) {
+                          _audience = v ?? '';
                           _changed();
                         },
                       ),
@@ -586,11 +756,11 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                         'لباس را روی زمینه ساده، با نور یکنواخت و بدون حضور مشتری عکاسی کنید. چهار نمای روبرو، پشت، چپ و راست را از گالری انتخاب کنید. برای کاتالوگ عکس روبرو ضروری است.',
                       ),
                       const Text(
-                        'لباس را به‌تنهایی، بدون پوشیدن و با فاصله از پس‌زمینه عکس بگیرید. پس‌زمینه خودکار حذف می‌شود؛ اولین بار اینترنت و سرویس‌های گوگل لازم است.',
+                        'عکس اصلی حفظ می‌شود. برای پرو زنده، مرز لباس و یقه فقط از JSON خوانده می‌شود. تعویض عکس روبرو به JSON تازه نیاز دارد.',
                       ),
                       if (_photoBusy) ...[
                         const LinearProgressIndicator(),
-                        const Text('در حال آماده‌سازی عکس و حذف پس‌زمینه…'),
+                        const Text('در حال آماده‌سازی عکس اصلی…'),
                       ],
                       for (final angle in photoAngles.entries)
                         Column(
@@ -635,23 +805,21 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                                   icon: const Icon(Icons.photo_camera_outlined),
                                   label: const Text('عکس با دوربین'),
                                 ),
-                                if (Platform.isAndroid &&
-                                    _photos[angle.key] != null)
-                                  OutlinedButton.icon(
-                                    onPressed: _photoBusy
-                                        ? null
-                                        : () => _removeBackground(angle.key),
-                                    icon: const Icon(Icons.auto_fix_high),
-                                    label: const Text('حذف پس‌زمینه'),
-                                  ),
                                 if (_photos[angle.key] != null)
                                   TextButton(
                                     onPressed: _photoBusy
                                         ? null
                                         : () {
                                             _photos.remove(angle.key);
-                                            if (angle.key == 'front')
+                                            if (angle.key == 'front') {
                                               _photos.remove('front_source');
+                                              _renderJson.clear();
+                                              _aiResponse.clear();
+                                              _aiError = null;
+                                              _item = _item!.copyWith(
+                                                isDraft: true,
+                                              );
+                                            }
                                             _changed();
                                           },
                                     child: const Text('برداشتن عکس'),
@@ -664,10 +832,76 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                   ),
                   const SizedBox(height: 20),
                   SectionCard(
+                    title: 'دریافت مشخصات از هوش مصنوعی',
+                    children: [
+                      const Text(
+                        '۱. عکس روبرو را انتخاب کنید. ۲. پرامپت را کپی کنید و همراه همان عکس مرجع به هوش مصنوعی بدهید. ۳. JSON خروجی را اینجا بچسبانید و اعمال کنید. ارسال خودکار انجام نمی‌شود.',
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            key: const Key('copy-ai-prompt'),
+                            onPressed: _aiBusy || _photoBusy
+                                ? null
+                                : _copyAiPrompt,
+                            icon: const Icon(Icons.copy),
+                            label: const Text('کپی سیستم پرامپت'),
+                          ),
+                          if (Platform.isAndroid &&
+                              _photos['front_source'] != null)
+                            OutlinedButton.icon(
+                              onPressed: _photoBusy || _aiBusy
+                                  ? null
+                                  : _shareReference,
+                              icon: const Icon(Icons.share_outlined),
+                              label: const Text('اشتراک عکس مرجع'),
+                            ),
+                        ],
+                      ),
+                      const Text(
+                        'قیمت، موجودی و اندازهٔ واقعی از عکس حدس زده نمی‌شوند. مقدار نامعلوم اطلاعات دستی شما را پاک نمی‌کند.',
+                      ),
+                      TextFormField(
+                        key: const Key('garment-ai-response'),
+                        controller: _aiResponse,
+                        minLines: 5,
+                        maxLines: 10,
+                        maxLength: GarmentRenderMetadata.maxCharacters,
+                        textDirection: TextDirection.ltr,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        keyboardType: TextInputType.multiline,
+                        decoration: InputDecoration(
+                          labelText: 'پاسخ کامل هوش مصنوعی (JSON)',
+                          alignLabelWithHint: true,
+                          counterText: '',
+                          errorText: _aiError,
+                          errorMaxLines: 5,
+                        ),
+                        onChanged: (_) {
+                          setState(() => _aiError = null);
+                          _changed();
+                        },
+                      ),
+                      FilledButton.icon(
+                        key: const Key('apply-ai-response'),
+                        onPressed: _aiBusy || _photoBusy
+                            ? null
+                            : _applyAiResponse,
+                        icon: const Icon(Icons.playlist_add_check),
+                        label: const Text('اعمال JSON و پرکردن فرم'),
+                      ),
+                      if (_aiBusy) const LinearProgressIndicator(),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  SectionCard(
                     title: 'اطلاعات پرو زنده',
                     children: [
                       const Text(
-                        'JSON مشخصات همین عکس روبرو را اینجا کپی کنید. این بخش اختیاری است؛ در پرو زنده برای برش یقه، نقاط اتصال و آستین‌ها استفاده می‌شود.',
+                        'این JSON با اعمال پاسخ هوش مصنوعی پر می‌شود و برای ثبت نهایی ضروری است. برای ویرایش دستی نیز می‌توانید JSON پرو را اینجا تغییر دهید؛ پیش‌نویس بدون آن قابل ذخیره است.',
                       ),
                       TextFormField(
                         key: const Key('garment-render-json'),
@@ -713,7 +947,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                     title: 'مشخصات لباس',
                     children: [
                       const Text(
-                        'اطلاعات این بخش توسط شما ثبت می‌شوند؛ تحلیل هوش مصنوعی هنوز متصل نیست.',
+                        'پس از اعمال پاسخ، مشخصات تشخیص‌داده‌شده پر می‌شوند؛ می‌توانید آن‌ها را بررسی و ویرایش کنید.',
                       ),
                       for (final field in definitions.where(
                         (f) => f.enabled || _metadata.containsKey(f.key),
@@ -741,7 +975,9 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               DynamicField(
-                                key: ValueKey(field.key),
+                                key: ValueKey(
+                                  '${field.key}-$_importGeneration',
+                                ),
                                 definition: field,
                                 value: _metadata[field.key],
                                 onChanged: (v) {

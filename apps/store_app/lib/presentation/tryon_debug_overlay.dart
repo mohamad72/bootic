@@ -49,8 +49,22 @@ class TryonDebugOverlay extends StatelessWidget {
       }
 
       final p = placement;
+      final camera = d == null ? '—' : (d.flag('front') ? 'جلو' : 'عقب');
+      const edgeStates = {
+        'both': 'هر دو شانه',
+        'partial': 'یک شانه',
+        'no_boundary': 'مرز مطمئن نیست؛ اتصال به مفصل',
+        'no_mask': 'ماسک نرسیده',
+        'mask_error': 'خطای ماسک',
+        'too_small': 'بدن برای اصلاح لبه کوچک است',
+        'pose_rejected': 'بدن پذیرفته نشده',
+      };
+      final edgeLine =
+          'لبه: ${edgeStates[d?.text('edgeStatus')] ?? 'در انتظار'}';
+      final liftLine =
+          'اصلاح شانه ۱۱/۱۲: ${n('lift11', 1)} / ${n('lift12', 1)} px';
       final lines = [
-        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v4-json'}',
+        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v5-edges'}',
         'تشخیص: ${_reasons[d?.text('reason')] ?? 'در انتظار اطلاعات'}',
         'تازگی: ${d?.fresh == true ? 'تازه' : 'قدیمی / بدون خروجی'} | عمر خروجی: ${n('resultAgeMs')} ms',
         'سرعت خروجی مدل: ${n('fps', 1)} fps | تأخیر: ${n('latencyMs')} ms',
@@ -64,14 +78,18 @@ class TryonDebugOverlay extends StatelessWidget {
         confidence(12, 'شانهٔ راست، نقطهٔ ۱۲'),
         confidence(23, 'لگن چپ، نقطهٔ ۲۳'),
         confidence(24, 'لگن راست، نقطهٔ ۲۴'),
-        'دوربین: ${d?.flag('front') == true ? 'جلو' : 'عقب'} | آینه: ${d?.flag('mirror') == true ? 'بله' : 'خیر'}',
+        'دوربین: $camera | آینه: ${d?.flag('mirror') == true ? 'بله' : 'خیر'}',
         'مرحله: $stage | افکت: ${d?.text('effect') ?? '—'}',
         'علامت دست: ${d?.text('gesture') ?? '—'} | رأی‌گیری: ${d?.flag('voting') == true ? 'فعال' : 'غیرفعال'}',
         'لباس: $garment | عکس: ${n('garmentWidth')}×${n('garmentHeight')} px',
-        'راهنما: سبز = نقاط مطمئن؛ قرمز = ضعیف؛ آبی = محدودهٔ نقاط؛ نارنجی = کادر لباس.',
+        edgeLine,
+        liftLine,
+        'ماسک بدن: ${n('maskWidth')}×${n('maskHeight')} | استخراج لبه: ${n('edgeMs')} ms',
+        'راهنما: سبز = مفاصل؛ صورتی = مرز ماسک بدن؛ زرد = اتصال اصلاح‌شدهٔ شانه؛ آبی = محدودهٔ نقاط.',
+        'نارنجی: ${d?.flag('garmentRendered') == true ? 'محدودهٔ تقریبی لباس فعال' : 'کادر راهنمای تنه؛ لباس JSON فعال نیست'}',
         'رندر لباس: ${d?.text('renderer') ?? '—'}',
         'کادر ورودی مشترک: ${d?.text('frameGeometry') ?? '—'}',
-        'توضیح: خطوط، تخمین نقاط بدن هستند، نه لبهٔ دقیق پوست. اندازهٔ سانتی‌متری بدون کالیبراسیون نداریم.',
+        'توضیح: مرز صورتی تخمین بدن و لباس فعلی است، نه پوست زیر لباس. اندازهٔ سانتی‌متری بدون کالیبراسیون نداریم.',
         'اطمینان: مقدار V احتمال دیده‌شدن نقطه و مقدار P احتمال حضور آن است.',
       ];
       return Stack(
@@ -100,9 +118,9 @@ class TryonDebugOverlay extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        const Expanded(
+                        Expanded(
                           child: Text(
-                            'دیباگ بدن',
+                            'دیباگ بدن · دوربین $camera',
                             style: TextStyle(
                               color: Colors.cyanAccent,
                               fontSize: 12,
@@ -129,7 +147,14 @@ class TryonDebugOverlay extends StatelessWidget {
                     for (final line
                         in expanded
                             ? lines
-                            : [lines[0], lines[1], lines[6], lines[3]])
+                            : [
+                                lines[0],
+                                lines[1],
+                                lines[6],
+                                edgeLine,
+                                liftLine,
+                                lines[3],
+                              ])
                       Text(
                         line,
                         textDirection: TextDirection.rtl,
@@ -196,6 +221,34 @@ class _PoseDebugPainter extends CustomPainter {
         return Offset(x, y);
       }
 
+      // Segmentation samples share exactly the same FILL_CENTER transform.
+      Offset? extraPoint(Object? value) {
+        if (value is! List ||
+            value.length != 2 ||
+            value[0] is! num ||
+            value[1] is! num)
+          return null;
+        final x = (value[0] as num).toDouble();
+        final y = (value[1] as num).toDouble();
+        if (!x.isFinite || !y.isFinite) return null;
+        return position(PoseDebugPoint(x, y, 1, 1));
+      }
+
+      final contour = d.values['bodyContour'];
+      if (contour is List) {
+        final dots = Paint()..color = Colors.pinkAccent;
+        for (final value in contour) {
+          final point = extraPoint(value);
+          if (point != null) canvas.drawCircle(point, 1.2, dots);
+        }
+      }
+      for (final index in [11, 12]) {
+        final fit = extraPoint(d.values['fit$index']);
+        if (fit == null || d.points.length <= index) continue;
+        paint.color = Colors.yellowAccent;
+        canvas.drawLine(position(d.points[index]), fit, paint);
+        canvas.drawCircle(fit, 6, paint);
+      }
       for (final (a, b) in connections) {
         if (d.points.length <= b || !d.points[a].valid || !d.points[b].valid)
           continue;

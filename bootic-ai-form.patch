@@ -1,0 +1,1859 @@
+diff --git a/apps/store_app/android/app/build.gradle.kts b/apps/store_app/android/app/build.gradle.kts
+index 5c6bd9b..c1d4410 100644
+--- a/apps/store_app/android/app/build.gradle.kts
++++ b/apps/store_app/android/app/build.gradle.kts
+@@ -36,7 +36,6 @@ flutter {
+ }
+ 
+ dependencies {
+-    implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
+     testImplementation("junit:junit:4.13.2")
+     val cameraxVersion = "1.4.2"
+     implementation("androidx.camera:camera-core:$cameraxVersion")
+diff --git a/apps/store_app/android/app/src/main/AndroidManifest.xml b/apps/store_app/android/app/src/main/AndroidManifest.xml
+index 5463096..9aa04c6 100644
+--- a/apps/store_app/android/app/src/main/AndroidManifest.xml
++++ b/apps/store_app/android/app/src/main/AndroidManifest.xml
+@@ -6,8 +6,14 @@
+         android:label="بوتیک" android:allowBackup="false"
+         android:name="${applicationName}"
+         android:icon="@mipmap/ic_launcher">
+-        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES"
+-            android:value="subject_segment" />
++        <provider
++            android:name="androidx.core.content.FileProvider"
++            android:authorities="${applicationId}.garment_reference"
++            android:exported="false"
++            android:grantUriPermissions="true">
++            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
++                android:resource="@xml/garment_reference_paths" />
++        </provider>
+         <activity
+             android:name=".MainActivity"
+             android:exported="true"
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentCutout.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentCutout.kt
+deleted file mode 100644
+index 708245c..0000000
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentCutout.kt
++++ /dev/null
+@@ -1,111 +0,0 @@
+-package ir.bootic.store_app
+-
+-import android.content.Context
+-import android.graphics.Bitmap
+-import android.graphics.BitmapFactory
+-import android.graphics.Color
+-import com.google.mlkit.vision.common.InputImage
+-import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
+-import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
+-import io.flutter.plugin.common.MethodChannel
+-import java.io.File
+-import java.util.concurrent.Executor
+-
+-/** Operates only on normalized app-private PNG copies, never a gallery original. */
+-internal class GarmentCutout(private val context: Context, private val executor: Executor) {
+-    fun process(path: String?, result: MethodChannel.Result) {
+-        executor.execute {
+-            var bitmap: Bitmap? = null
+-            try {
+-                val file = File(requireNotNull(path)).canonicalFile
+-                require(file.path.startsWith(File(context.filesDir, "garments").canonicalPath + File.separator))
+-                require(file.extension.equals("png", true) && file.isFile && file.length() <= 15L * 1024 * 1024)
+-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+-                BitmapFactory.decodeFile(file.path, bounds)
+-                require(bounds.outWidth in 64..6000 && bounds.outHeight in 64..6000)
+-                var sample = 1
+-                while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
+-                val source = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply {
+-                    inSampleSize = sample
+-                    inPreferredConfig = Bitmap.Config.ARGB_8888
+-                }) ?: error("Invalid image")
+-                bitmap = source
+-                // Do not re-segment an already transparent asset.
+-                if (hasTransparency(source)) {
+-                    saveCropped(source, file)
+-                    source.recycle()
+-                    result.success(null)
+-                    return@execute
+-                }
+-                val segmenter = SubjectSegmentation.getClient(
+-                    SubjectSegmenterOptions.Builder().enableForegroundBitmap().build(),
+-                )
+-                segmenter.process(InputImage.fromBitmap(source, 0))
+-                    .addOnSuccessListener(executor) { segmentation ->
+-                        val foreground = segmentation.foregroundBitmap
+-                        try {
+-                            requireNotNull(foreground)
+-                            require(hasTransparency(foreground))
+-                            saveCropped(foreground, file)
+-                            result.success(null)
+-                        } catch (_: Exception) {
+-                            result.error("CUTOUT_EMPTY", "لباس از پس‌زمینه جدا نشد؛ لباس را به‌تنهایی با فاصله از پس‌زمینه عکس بگیرید", null)
+-                        } finally {
+-                            if (foreground !== source) foreground?.recycle()
+-                            source.recycle()
+-                            segmenter.close()
+-                        }
+-                    }
+-                    .addOnFailureListener(executor) {
+-                        source.recycle()
+-                        segmenter.close()
+-                        result.error("CUTOUT_UNAVAILABLE", "مدل حذف پس‌زمینه آماده نیست؛ اینترنت و سرویس‌های گوگل را بررسی و کمی بعد دوباره تلاش کنید", null)
+-                    }
+-            } catch (_: Exception) {
+-                bitmap?.takeUnless { it.isRecycled }?.recycle()
+-                result.error("CUTOUT_FAILED", "پردازش عکس لباس ممکن نشد؛ عکس دیگری انتخاب کنید", null)
+-            }
+-        }
+-    }
+-
+-    private fun hasTransparency(bitmap: Bitmap): Boolean {
+-        if (!bitmap.hasAlpha()) return false
+-        val row = IntArray(bitmap.width)
+-        var transparent = 0
+-        for (y in 0 until bitmap.height) {
+-            bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+-            transparent += row.count { Color.alpha(it) < 16 }
+-        }
+-        return transparent > bitmap.width * bitmap.height / 100
+-    }
+-
+-    private fun saveCropped(bitmap: Bitmap, file: File) {
+-        var left = bitmap.width
+-        var top = bitmap.height
+-        var right = -1
+-        var bottom = -1
+-        val row = IntArray(bitmap.width)
+-        for (y in 0 until bitmap.height) {
+-            bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+-            for (x in row.indices) if (Color.alpha(row[x]) > 16) {
+-                left = minOf(left, x); right = maxOf(right, x)
+-                top = minOf(top, y); bottom = maxOf(bottom, y)
+-            }
+-        }
+-        require(right >= left && bottom >= top)
+-        // Keep the renderer's minimum image dimensions while removing empty margins.
+-        left = maxOf(0, minOf(left, right - 63))
+-        top = maxOf(0, minOf(top, bottom - 63))
+-        right = minOf(bitmap.width - 1, maxOf(right, left + 63))
+-        bottom = minOf(bitmap.height - 1, maxOf(bottom, top + 63))
+-        val cropped = Bitmap.createBitmap(bitmap, left, top, right - left + 1, bottom - top + 1)
+-        val temporary = File(file.path + ".cutout.tmp")
+-        try {
+-            temporary.outputStream().use { check(cropped.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+-            check(temporary.renameTo(file))
+-        } finally {
+-            temporary.delete()
+-            if (cropped !== bitmap) cropped.recycle()
+-        }
+-    }
+-}
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+index 1cd7ad7..b31945b 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+@@ -3,9 +3,10 @@ package ir.bootic.store_app
+ import android.Manifest
+ import android.content.Context
+ import android.content.Intent
++import android.content.ClipData
++import androidx.core.content.FileProvider
+ import android.content.pm.PackageManager
+ import android.graphics.Bitmap
+-import android.graphics.BitmapFactory
+ import android.graphics.Matrix
+ import android.hardware.display.DisplayManager
+ import android.os.Bundle
+@@ -221,8 +222,6 @@ class MainActivity : FlutterActivity() {
+                     result.success(effect.durationMs)
+                 }
+             }
+-            "removeGarmentBackground" -> GarmentCutout(this, cameraExecutor)
+-                .process(call.argument<String>("path"), result)
+             "setVotingEnabled" -> {
+                 votingEnabled = call.argument<Boolean>("enabled") == true
+                 result.success(null)
+@@ -276,7 +275,7 @@ class MainActivity : FlutterActivity() {
+             }
+             "detachDisplay" -> { detachDisplay(); result.success(null) }
+             "setGarment" -> setGarment(call, result)
+-            "prepareGarmentPhoto" -> prepareGarmentPhoto(call, result)
++            "shareGarmentReference" -> shareGarmentReference(call, result)
+             "setGarmentGhost" -> {
+                 garmentGhost = call.argument<Boolean>("enabled") == true
+                 phoneGarment?.alpha = if (garmentGhost) 0.3f else 1f
+@@ -654,23 +653,25 @@ class MainActivity : FlutterActivity() {
+         return file
+     }
+ 
+-    private fun prepareGarmentPhoto(call: MethodCall, result: MethodChannel.Result) {
+-        val path = call.argument<String>("path")
+-        val metadata = call.argument<Map<String, Any?>>("renderMetadata")
+-        cameraExecutor.execute {
+-            try {
+-                val file = garmentFile(path)
+-                require(file.path.startsWith(File(filesDir, "garments").canonicalPath + File.separator))
+-                val asset = GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(requireNotNull(metadata)))
+-                val temporary = File(file.path + ".metadata.tmp")
+-                try {
+-                    temporary.outputStream().use { check(asset.masked.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+-                    check(temporary.renameTo(file))
+-                } finally { temporary.delete() }
+-                runOnUiThread { result.success(null) }
+-            } catch (_: Exception) {
+-                runOnUiThread { result.error("BAD_METADATA_PHOTO", "عکس با مختصات JSON هماهنگ نیست؛ عکس اصلی همین لباس را انتخاب کنید", null) }
++    private fun shareGarmentReference(call: MethodCall, result: MethodChannel.Result) {
++        try {
++            val file = garmentFile(call.argument<String>("path"))
++            require(file.path.startsWith(File(filesDir, "garments").canonicalPath + File.separator))
++            val directory = File(cacheDir, "garment-reference").apply { mkdirs() }
++            directory.listFiles()?.filter { System.currentTimeMillis()-it.lastModified()>86400000L }?.forEach { it.delete() }
++            val copy = File(directory, file.name)
++            file.copyTo(copy, overwrite=true)
++            val uri = FileProvider.getUriForFile(this, "$packageName.garment_reference", copy)
++            val intent = Intent(Intent.ACTION_SEND).apply {
++                type = "image/png"
++                putExtra(Intent.EXTRA_STREAM, uri)
++                clipData = ClipData.newRawUri("garment", uri)
++                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+             }
++            startActivity(Intent.createChooser(intent, "ارسال عکس مرجع لباس"))
++            result.success(null)
++        } catch (_: Exception) {
++            result.error("SHARE_FAILED", "اشتراک‌گذاری عکس مرجع ممکن نشد", null)
+         }
+     }
+ 
+@@ -687,18 +688,8 @@ class MainActivity : FlutterActivity() {
+         cameraExecutor.execute {
+             try {
+                 val file = garmentFile(path)
+-                val asset = metadata?.let { GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(it)) }
+-                val decoded = asset?.masked ?: run {
+-                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+-                    BitmapFactory.decodeFile(file.path, options)
+-                    require(options.outWidth in 64..6000 && options.outHeight in 64..6000)
+-                    var sample = 1
+-                    while (options.outWidth/sample > 1600 || options.outHeight/sample > 1600) sample *= 2
+-                    options.inJustDecodeBounds = false
+-                    options.inSampleSize = sample
+-                    options.inPreferredConfig = Bitmap.Config.ARGB_8888
+-                    requireNotNull(BitmapFactory.decodeFile(file.path, options))
+-                }
++                val asset = GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(requireNotNull(metadata)))
++                val decoded = asset.masked
+                 runOnUiThread {
+                     if (generation != garmentGeneration) {
+                         result.error("STALE_GARMENT", "درخواست لباس عوض شد", null)
+diff --git a/apps/store_app/android/app/src/main/res/xml/garment_reference_paths.xml b/apps/store_app/android/app/src/main/res/xml/garment_reference_paths.xml
+new file mode 100644
+index 0000000..feb086b
+--- /dev/null
++++ b/apps/store_app/android/app/src/main/res/xml/garment_reference_paths.xml
+@@ -0,0 +1,4 @@
++<?xml version="1.0" encoding="utf-8"?>
++<paths xmlns:android="http://schemas.android.com/apk/res/android">
++    <cache-path name="garment_reference" path="garment-reference/" />
++</paths>
+diff --git a/apps/store_app/lib/application/live_tryon_bridge.dart b/apps/store_app/lib/application/live_tryon_bridge.dart
+index e213087..3225d3d 100644
+--- a/apps/store_app/lib/application/live_tryon_bridge.dart
++++ b/apps/store_app/lib/application/live_tryon_bridge.dart
+@@ -104,20 +104,12 @@ class LiveTryonBridge {
+   Future<void> setVotingEnabled(bool enabled) async =>
+       _channel.invokeMethod<void>('setVotingEnabled', {'enabled': enabled});
+ 
+-  Future<void> prepareGarmentPhoto(
+-    String path,
+-    Map<String, Object?> metadata,
+-  ) async => _channel.invokeMethod<void>('prepareGarmentPhoto', {
+-    'path': path,
+-    'renderMetadata': metadata,
+-  });
++  Future<void> shareGarmentReference(String path) async =>
++      _channel.invokeMethod<void>('shareGarmentReference', {'path': path});
+ 
+   Future<void> setGarmentGhost(bool enabled) async =>
+       _channel.invokeMethod<void>('setGarmentGhost', {'enabled': enabled});
+ 
+-  Future<void> removeGarmentBackground(String path) async =>
+-      _channel.invokeMethod<void>('removeGarmentBackground', {'path': path});
+-
+   Future<void> stop() async => _channel.invokeMethod<void>('stop');
+ 
+   Future<List<ExternalDisplay>> listDisplays() async {
+diff --git a/apps/store_app/lib/domain/garment.dart b/apps/store_app/lib/domain/garment.dart
+index ae01ab7..445850e 100644
+--- a/apps/store_app/lib/domain/garment.dart
++++ b/apps/store_app/lib/domain/garment.dart
+@@ -7,6 +7,13 @@ const garmentCategories = {
+   'trousers': 'شلوار',
+   'skirt': 'دامن',
+ };
++const garmentAudiences = {
++  'men': 'مردانه',
++  'women': 'زنانه',
++  'girls': 'دخترانه',
++  'boys': 'پسرانه',
++  'unisex': 'یونیسکس',
++};
+ const photoAngles = {
+   'front': 'روبرو',
+   'back': 'پشت',
+@@ -20,6 +27,7 @@ class Garment {
+     required this.name,
+     this.localRevision = 0,
+     this.category = 'top',
++    this.audience = '',
+     this.collection = '',
+     this.sku = '',
+     this.barcode = '',
+@@ -35,6 +43,7 @@ class Garment {
+     Set<String> excludedFields = const {},
+     this.processingStatus = 'notRequested',
+     this.tryOnJson = '',
++    this.aiImportJson = '',
+     required this.createdAt,
+     required this.updatedAt,
+   }) : metadata = Map.unmodifiable(metadata),
+@@ -48,7 +57,7 @@ class Garment {
+   }
+ 
+   final String id, name, category, collection, sku, barcode, processingStatus;
+-  final String tryOnJson;
++  final String tryOnJson, aiImportJson, audience;
+   final int localRevision, price, stock;
+   final int? discountPrice;
+   final bool isActive, isDraft, archived;
+@@ -58,11 +67,21 @@ class Garment {
+   final Set<String> excludedFields;
+   final DateTime createdAt, updatedAt;
+ 
+-  // A local catalog photo is never a validated rendering asset.
+-  bool get tryOnEligible => false;
++  bool get tryOnEligible =>
++      !isDraft &&
++      isActive &&
++      !archived &&
++      stock > 0 &&
++      photos['front'] != null &&
++      photos['front_source'] != null &&
++      tryOnJson.trim().isNotEmpty &&
++      renderMetadataError == null;
+   int get effectivePrice => discountPrice ?? price;
+ 
+-  String? get renderMetadataError {
++  // Garments are immutable; avoid parsing large JSON on every camera UI frame.
++  late final String? renderMetadataError = _checkRenderMetadata();
++
++  String? _checkRenderMetadata() {
+     try {
+       GarmentRenderMetadata.parse(tryOnJson);
+       return null;
+@@ -73,9 +92,15 @@ class Garment {
+ 
+   List<String> validate() => [
+     if (renderMetadataError case final String error) error,
++    if (aiImportJson.length > GarmentRenderMetadata.maxCharacters)
++      'حجم پاسخ هوش مصنوعی بیش از حد مجاز است',
+     if (name.trim().isEmpty) 'نام لباس را وارد کنید',
+     if (name.length > 120) 'نام لباس حداکثر ۱۲۰ نویسه است',
+     if (!garmentCategories.containsKey(category)) 'دسته لباس نامعتبر است',
++    if (audience.isNotEmpty && !garmentAudiences.containsKey(audience))
++      'گروه لباس نامعتبر است',
++    if (!isDraft && !archived && tryOnJson.trim().isEmpty)
++      'برای ثبت لباس، JSON پرو زنده ضروری است',
+     if (price < 0) 'قیمت نمی‌تواند منفی باشد',
+     if (price > 999999999999) 'قیمت از سقف مجاز بیشتر است',
+     if (discountPrice != null &&
+@@ -85,9 +110,7 @@ class Garment {
+     if (stock > 999999) 'موجودی از سقف مجاز بیشتر است',
+     if (measurements.values.any((v) => !v.isFinite || v <= 0 || v > 10000))
+       'اندازه باید بین صفر و ۱۰۰۰۰ میلی‌متر باشد',
+-    if (!isDraft &&
+-        tryOnJson.trim().isNotEmpty &&
+-        photos['front_source'] == null)
++    if (!isDraft && !archived && photos['front_source'] == null)
+       'برای پرو با JSON، عکس اصلی روبرو را دوباره انتخاب کنید',
+     if (!isDraft && photos['front'] == null)
+       'برای ثبت در کاتالوگ عکس روبرو لازم است',
+@@ -96,6 +119,7 @@ class Garment {
+   Garment copyWith({
+     String? name,
+     String? category,
++    String? audience,
+     String? collection,
+     String? sku,
+     String? barcode,
+@@ -113,11 +137,13 @@ class Garment {
+     Set<String>? excludedFields,
+     String? processingStatus,
+     String? tryOnJson,
++    String? aiImportJson,
+     DateTime? updatedAt,
+   }) => Garment(
+     id: id,
+     name: name ?? this.name,
+     category: category ?? this.category,
++    audience: audience ?? this.audience,
+     collection: collection ?? this.collection,
+     sku: sku ?? this.sku,
+     barcode: barcode ?? this.barcode,
+@@ -134,6 +160,7 @@ class Garment {
+     excludedFields: excludedFields ?? this.excludedFields,
+     processingStatus: processingStatus ?? this.processingStatus,
+     tryOnJson: tryOnJson ?? this.tryOnJson,
++    aiImportJson: aiImportJson ?? this.aiImportJson,
+     createdAt: createdAt,
+     updatedAt: updatedAt ?? this.updatedAt,
+   );
+@@ -158,6 +185,8 @@ class Garment {
+     'excludedFields': excludedFields.toList(),
+     'processingStatus': processingStatus,
+     'tryOnJson': tryOnJson,
++    'aiImportJson': aiImportJson,
++    'audience': audience,
+     'createdAt': createdAt.toIso8601String(),
+     'updatedAt': updatedAt.toIso8601String(),
+   };
+@@ -183,6 +212,8 @@ class Garment {
+     excludedFields: Set<String>.from(j['excludedFields'] as List),
+     processingStatus: j['processingStatus'] as String,
+     tryOnJson: j['tryOnJson'] as String? ?? '',
++    aiImportJson: j['aiImportJson'] as String? ?? '',
++    audience: j['audience'] as String? ?? '',
+     createdAt: DateTime.parse(j['createdAt'] as String),
+     updatedAt: DateTime.parse(j['updatedAt'] as String),
+   );
+diff --git a/apps/store_app/lib/domain/garment_ai_import.dart b/apps/store_app/lib/domain/garment_ai_import.dart
+new file mode 100644
+index 0000000..8cf564f
+--- /dev/null
++++ b/apps/store_app/lib/domain/garment_ai_import.dart
+@@ -0,0 +1,181 @@
++import 'dart:convert';
++import 'field_definition.dart';
++import 'garment.dart';
++import 'garment_render_metadata.dart';
++
++/// Validates the entire response before exposing any form changes.
++/// null means unknown: it never clears an operator's existing value.
++class GarmentAiImport {
++  GarmentAiImport._(this.sourceJson, this.values, this.renderJson);
++  static const schema = 'bootic.garment-import/1';
++  final String sourceJson, renderJson;
++  final Map<String, dynamic> values;
++
++  static GarmentAiImport parse(
++    String text, {
++    required String photoId,
++    required int width,
++    required int height,
++    required List<FieldDefinition> fields,
++  }) {
++    if (text.length > GarmentRenderMetadata.maxCharacters) {
++      throw const FormatException('حجم پاسخ بیش از حد مجاز است');
++    }
++    var input = text.trim();
++    // Accept one complete JSON code block, never extract a guessed substring.
++    if (input.startsWith('```')) {
++      final match = RegExp(
++        r'^```(?:json)?\s*\n([\s\S]*?)\n```$',
++        caseSensitive: false,
++      ).firstMatch(input);
++      if (match == null)
++        throw const FormatException('فقط یک JSON کامل وارد کنید');
++      input = match[1]!.trim();
++    }
++    Object? decoded;
++    try {
++      decoded = jsonDecode(input);
++    } on FormatException {
++      throw const FormatException('پاسخ، JSON معتبر نیست');
++    }
++    Map<String, dynamic> object(Object? value, String label) {
++      if (value is! Map<String, dynamic>)
++        throw FormatException('بخش $label باید یک شیء باشد');
++      return value;
++    }
++
++    void keys(Map<String, dynamic> map, Set<String> allowed, String label) {
++      if (map.keys.any((key) => !allowed.contains(key)))
++        throw FormatException(
++          'فیلد ناشناخته در $label؛ با پرامپت همین فرم خروجی بگیرید',
++        );
++    }
++
++    final root = object(decoded, 'پاسخ');
++    keys(root, {'schema_version', 'photo_id', 'garment', 'try_on'}, 'پاسخ');
++    if (root['schema_version'] != schema)
++      throw const FormatException(
++        'نسخهٔ پاسخ باید bootic.garment-import/1 باشد',
++      );
++    if (photoId.isEmpty || root['photo_id'] != photoId)
++      throw const FormatException(
++        'این پاسخ متعلق به عکس فعلی نیست؛ پرامپت همین عکس را دوباره کپی کنید',
++      );
++    final data = object(root['garment'], 'garment');
++    const allowed = {
++      'name',
++      'category',
++      'audience',
++      'collection',
++      'sku',
++      'barcode',
++      'price',
++      'discountPrice',
++      'stock',
++      'isActive',
++      'metadata',
++      'measurements_mm',
++    };
++    keys(data, allowed, 'garment');
++    if (!allowed.every(data.containsKey))
++      throw const FormatException(
++        'بخش garment ناقص است؛ فیلدهای نامعلوم را null بگذارید',
++      );
++    for (final entry in {
++      'name': 120,
++      'collection': 500,
++      'sku': 200,
++      'barcode': 200,
++    }.entries) {
++      final value = data[entry.key];
++      if (value != null &&
++          (value is! String ||
++              value.length > entry.value ||
++              value.trim().isEmpty))
++        throw FormatException(
++          'مقدار ${entry.key} نامعتبر است؛ برای نامعلوم null بگذارید',
++        );
++    }
++    if (data['category'] != null &&
++        !garmentCategories.containsKey(data['category']))
++      throw const FormatException('دستهٔ لباس در پاسخ معتبر نیست');
++    if (data['audience'] != null &&
++        !garmentAudiences.containsKey(data['audience']))
++      throw const FormatException(
++        'گروه مردانه/زنانه/کودک/یونیسکس در پاسخ معتبر نیست',
++      );
++    for (final key in ['price', 'discountPrice', 'stock']) {
++      final value = data[key];
++      final max = key == 'stock' ? 999999 : 999999999999;
++      if (value != null && (value is! int || value < 0 || value > max))
++        throw FormatException(
++          'مقدار $key باید عدد صحیح نامنفی در محدودهٔ مجاز باشد',
++        );
++    }
++    if (data['isActive'] != null && data['isActive'] is! bool)
++      throw const FormatException(
++        'وضعیت فعال بودن باید true، false یا null باشد',
++      );
++    final definitions = {
++      for (final field in fields.where((f) => f.enabled)) field.key: field,
++    };
++    final metadata = object(data['metadata'], 'metadata');
++    for (final entry in metadata.entries) {
++      final field = definitions[entry.key];
++      if (field == null)
++        throw FormatException('مشخصهٔ ${entry.key} در فرم فعلی وجود ندارد');
++      if (entry.value != null && field.validate(entry.value) != null)
++        throw FormatException('${field.label}: ${field.validate(entry.value)}');
++    }
++    final measurements = object(data['measurements_mm'], 'measurements_mm');
++    keys(measurements, {'chest', 'length'}, 'اندازه‌ها');
++    for (final entry in measurements.entries) {
++      final v = entry.value;
++      if (v != null && (v is! num || !v.isFinite || v <= 0 || v > 10000))
++        throw FormatException('اندازهٔ ${entry.key} معتبر نیست');
++    }
++    final render = object(root['try_on'], 'try_on');
++    final renderJson = jsonEncode(render);
++    GarmentRenderMetadata.parse(renderJson);
++    final source = object(render['source'], 'try_on.source');
++    if (source['width_px'] != width || source['height_px'] != height)
++      throw const FormatException(
++        'ابعاد JSON با عکس مرجع فعلی یکی نیست؛ ابعاد درج‌شده در پرامپت را استفاده کنید',
++      );
++    return GarmentAiImport._(jsonEncode(root), data, renderJson);
++  }
++
++  Garment applyTo(Garment current) {
++    String? string(String key) => (values[key] as String?)?.trim();
++    final metadata = Map<String, Object?>.of(current.metadata);
++    for (final e in (values['metadata'] as Map<String, dynamic>).entries) {
++      if (e.value != null) metadata[e.key] = e.value;
++    }
++    final measurements = Map<String, double>.of(current.measurements);
++    for (final e
++        in (values['measurements_mm'] as Map<String, dynamic>).entries) {
++      if (e.value != null) measurements[e.key] = (e.value as num).toDouble();
++    }
++    final result = current.copyWith(
++      name: string('name'),
++      category: string('category'),
++      audience: string('audience'),
++      collection: string('collection'),
++      sku: string('sku'),
++      barcode: string('barcode'),
++      price: values['price'] as int?,
++      discountPrice: values['discountPrice'] as int?,
++      stock: values['stock'] as int?,
++      isActive: values['isActive'] as bool?,
++      metadata: metadata,
++      measurements: measurements,
++      tryOnJson: renderJson,
++      aiImportJson: sourceJson,
++      // AI fills a reviewable draft; only the operator publishes it.
++      isDraft: true,
++    );
++    final errors = result.validate();
++    if (errors.isNotEmpty) throw FormatException(errors.join('\n'));
++    return result;
++  }
++}
+diff --git a/apps/store_app/lib/domain/garment_ai_prompt.dart b/apps/store_app/lib/domain/garment_ai_prompt.dart
+new file mode 100644
+index 0000000..f979e9e
+--- /dev/null
++++ b/apps/store_app/lib/domain/garment_ai_prompt.dart
+@@ -0,0 +1,131 @@
++import 'dart:convert';
++import 'field_definition.dart';
++import 'garment.dart';
++import 'garment_ai_import.dart';
++import 'garment_render_metadata.dart';
++
++/// A manual copy/paste workflow. No API keys, network calls or image uploads.
++class GarmentAiPrompt {
++  static String build({
++    required String photoId,
++    required int width,
++    required int height,
++    required List<FieldDefinition> fields,
++    Map<String, Object?> knownValues = const {},
++  }) {
++    final enabled = fields.where((f) => f.enabled).toList();
++    final contract = {
++      'photo_id': photoId,
++      'coordinate_canvas': {'width_px': width, 'height_px': height},
++      'allowed_categories': garmentCategories,
++      'allowed_audiences': garmentAudiences,
++      'metadata_fields': enabled.map((f) => f.toJson()).toList(),
++      'operator_supplied_values': knownValues,
++    };
++    final template = {
++      'schema_version': GarmentAiImport.schema,
++      'photo_id': photoId,
++      'garment': {
++        'name': null,
++        'category': null,
++        'audience': null,
++        'collection': null,
++        'sku': null,
++        'barcode': null,
++        'price': null,
++        'discountPrice': null,
++        'stock': null,
++        'isActive': null,
++        'metadata': {for (final field in enabled) field.key: null},
++        'measurements_mm': {'chest': null, 'length': null},
++      },
++      'try_on': {
++        'schema_version': GarmentRenderMetadata.schema,
++        'source': {
++          'image': photoId,
++          'width_px': width,
++          'height_px': height,
++          'coordinate_system':
++              'source-image pixels, origin top-left, x-right, y-down',
++          'points_convention':
++              'image_left/image_right; not anatomical left/right',
++          'source_view': 'front',
++          'pixel_coordinates_are_approximate': true,
++        },
++        'segmentation': {
++          'outer_contour_px': [
++            [0, 0],
++            [0, 0],
++            [0, 0],
++          ],
++          'subtract_polygons_px': {},
++        },
++        'landmarks_px': {
++          'shoulder_image_left': [0, 0],
++          'shoulder_image_right': [0, 0],
++          'hem_center': [0, 0],
++          'left_armpit': [0, 0],
++          'right_armpit': [0, 0],
++          'left_sleeve_hem_center': [0, 0],
++          'right_sleeve_hem_center': [0, 0],
++        },
++        'regions': {
++          'torso': {
++            'polygon_px': [
++              [0, 0],
++              [0, 0],
++              [0, 0],
++            ],
++          },
++          'sleeve_image_left': {
++            'polygon_px': [
++              [0, 0],
++              [0, 0],
++              [0, 0],
++            ],
++          },
++          'sleeve_image_right': {
++            'polygon_px': [
++              [0, 0],
++              [0, 0],
++              [0, 0],
++            ],
++          },
++        },
++        'rendering': {'mirror_texture_only_if_front_camera_is_mirrored': true},
++      },
++    };
++    const json = JsonEncoder.withIndent('  ');
++    return '''You are Bootic Garment Geometry and Catalog Extractor v1.
++Analyze the ONE attached garment photograph. Return ONE JSON object only, matching OUTPUT TEMPLATE below. No prose, markdown, code fences, image generation, URLs or executable code.
++
++WORKFLOW AND REFERENCE
++The operator will paste your response into Bootic to fill the catalog form AND supply live try-on geometry. The original photograph is the texture: do not generate a replacement image, crop it, trim its canvas, erase its background, mirror it or change its framing. The app masks ONLY from your polygons during rendering.
++Echo photo_id EXACTLY. Use the supplied coordinate_canvas dimensions in try_on.source. If the attached photograph is the same uncropped image at another resolution, map all coordinates proportionally onto coordinate_canvas. If it is a different photo, cropped, or contains multiple garments, ask for a correct single reference instead of fabricating usable geometry.
++
++CATALOG RULES
++- Use Persian for descriptive text, but use EXACT machine keys for category and audience from the contract. null means unknown and preserves existing manual information. Do not convert unknown numbers to zero.
++- Give a short visible description as name. Fill metadata using ONLY enabled metadata_fields keys, declared types and exact listed option strings. No new fields or enum options. Describe visible pattern/color/style honestly; exact fabric composition requires a readable label or operator information.
++- Metadata types: text is a string up to 500 characters; longText up to 4000; integer is an integer; decimal a finite number; boolean true/false; singleSelect one exact listed option; multiSelect an array of exact listed options (at most 100); date ISO Gregorian YYYY-MM-DD; year an integer 1900..2200; yearRange [minYear,maxYear] in that range; numberRange [min,max]; color #RRGGBB; score a number 0..1; tags an array of at most 20 nonempty strings (at most 80 characters each). Use null for unknown, not empty strings or placeholders.
++- audience is a garment product category (men, women, girls, boys, unisex). Use explicit product information, a readable label or the operator's choice; when unclear use null. Do not infer the sex/gender/age of a person wearing the garment. Never use unisex as an unknown default.
++- price and discountPrice are WHOLE TOMAN amounts; stock is a whole nonnegative count. These, collection, sku, barcode, isActive and physical measurements are null unless explicitly supplied by the operator or clearly readable on the relevant label. Never estimate price, inventory or centimetres/millimetres from appearance. measurements_mm.chest is garment chest WIDTH, not circumference; length is garment length, both in millimetres. No physical measurement without supplied calibration/verified data.
++- Retain the operator_supplied_values. Do not replace known values with visual guesses. Unknown metadata values are null, including optional required fields that cannot be established; the operator will complete these in the form.
++
++GEOMETRY RULES
++1. Preserve the source pixels and canvas. Pixel origin is top-left; x increases right, y increases down. ALL points use coordinate_canvas, must be finite and inside its bounds. Image-left/right are NOT anatomical left/right. Never mirror the source landmarks.
++2. Trace outer_contour_px clockwise around ONLY the garment. Use 3..1024 vertices, with more near neck/cuffs/armpits/hem; avoid self intersections and degenerate shapes. Do not include floor, hanger, hands, skin or background.
++3. subtract_polygons_px is an object of named removal polygons (3..1024 points each, at most 16). Subtract internal empty regions. For front-view shirts, also remove the visible REAR panel, tag and back neck binding inside the neck opening, keeping the real FRONT collar band. Preserve graphics, logos, stripes, seams, cuffs, buttons and all real front-facing garment texture. Use {} when there are no holes.
++4. Source shoulder_image_left and shoulder_image_right are the upper shoulder seam/sleeve-root attachment points on the garment, not rectangle corners or armpits. hem_center is the middle of the torso's lower hem, not the middle of the photograph. These three anchors must not be collinear.
++5. Annotate torso and each VISIBLE sleeve separately with polygon_px. Sleeve polygons touch the torso at their actual shoulder-to-armpit seam. Supply left_armpit/right_armpit and left_sleeve_hem_center/right_sleeve_hem_center for the respective sleeve. Sleeve hem_center is the centre of its CUFF opening, not its outermost tip. The renderer uses these exact keys.
++6. Omit a nonexistent/hidden optional sleeve region and its optional landmarks instead of inventing points. Do not put [0,0] placeholders in actual output. For sleeveless garments omit both sleeve regions. Required outer contour and shoulder/hem anchors must be genuine observations. If these cannot be established, request a clearer front photo instead of inventing geometry.
++7. The current renderer attaches torso to shoulders/hips and sleeves towards elbows with a 2D mesh. Do not claim exact 3D drape, true size fit, unseen back/side reconstruction, or foreground occlusion. Do not add unsupported instructions or pretend they execute. Geometry is approximate, to be verified in live debug.
++8. Validate coordinates, anchors, polygons, field types and option values before answering. No alpha bitmap/base64/RLE arrays. Return the complete object, not a patch or a string containing JSON.
++
++CURRENT CONTRACT
++${json.convert(contract)}
++
++OUTPUT TEMPLATE (replace all placeholder coordinates and fill observed values; keep unknown catalog values null)
++${json.convert(template)}
++''';
++  }
++}
+diff --git a/apps/store_app/lib/presentation/customer_screen.dart b/apps/store_app/lib/presentation/customer_screen.dart
+index e617859..661a23d 100644
+--- a/apps/store_app/lib/presentation/customer_screen.dart
++++ b/apps/store_app/lib/presentation/customer_screen.dart
+@@ -94,18 +94,8 @@ class _CustomerScreenState extends ConsumerState<CustomerScreen> {
+                   child: const Text('تلاش دوباره'),
+                 ),
+               ),
+-              data: (all) => _content(
+-                all
+-                    .where(
+-                      (g) =>
+-                          !g.isDraft &&
+-                          g.isActive &&
+-                          !g.archived &&
+-                          g.stock > 0 &&
+-                          g.photos['front'] != null,
+-                    )
+-                    .toList(),
+-              ),
++              data: (all) =>
++                  _content(all.where((g) => g.tryOnEligible).toList()),
+             ),
+       ),
+     ),
+diff --git a/apps/store_app/lib/presentation/garment_detail_screen.dart b/apps/store_app/lib/presentation/garment_detail_screen.dart
+index 8f8e6fc..343b3a7 100644
+--- a/apps/store_app/lib/presentation/garment_detail_screen.dart
++++ b/apps/store_app/lib/presentation/garment_detail_screen.dart
+@@ -152,6 +152,13 @@ class _GarmentDetailScreenState extends ConsumerState<GarmentDetailScreen> {
+                   ),
+                 ),
+                 Chip(label: Text('${faNumber(g.stock)} عدد موجود')),
++                if (garmentAudiences[g.audience] != null)
++                  Chip(label: Text(garmentAudiences[g.audience]!)),
++                if (!g.isDraft &&
++                    !g.archived &&
++                    (g.tryOnJson.trim().isEmpty ||
++                        g.photos['front_source'] == null))
++                  const Chip(label: Text('تکمیل JSON و عکس اصلی لازم است')),
+                 if (!g.isActive) const Chip(label: Text('غیرفعال')),
+               ],
+             ),
+diff --git a/apps/store_app/lib/presentation/garment_editor_screen.dart b/apps/store_app/lib/presentation/garment_editor_screen.dart
+index a678e96..7ddc090 100644
+--- a/apps/store_app/lib/presentation/garment_editor_screen.dart
++++ b/apps/store_app/lib/presentation/garment_editor_screen.dart
+@@ -1,5 +1,7 @@
+ import 'dart:async';
+ import 'dart:io';
++import 'dart:ui' as ui;
++import 'package:flutter/services.dart';
+ import 'package:flutter/material.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import 'package:go_router/go_router.dart';
+@@ -9,6 +11,9 @@ import 'package:uuid/uuid.dart';
+ import '../app/providers.dart';
+ import '../application/live_tryon_bridge.dart';
+ import '../domain/garment.dart';
++import '../domain/field_definition.dart';
++import '../domain/garment_ai_import.dart';
++import '../domain/garment_ai_prompt.dart';
+ import '../domain/garment_render_metadata.dart';
+ import '../domain/persian.dart';
+ import 'common.dart';
+@@ -32,7 +37,12 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+       _sku = TextEditingController(),
+       _barcode = TextEditingController();
+   final _chest = TextEditingController(), _length = TextEditingController();
+-  final _renderJson = TextEditingController();
++  final _renderJson = TextEditingController(),
++      _aiResponse = TextEditingController();
++  String? _aiError;
++  bool _aiBusy = false, _categoryKnown = false;
++  int _importGeneration = 0;
++  String _audience = '';
+   Garment? _item;
+   String? _loadError;
+   String _category = 'top';
+@@ -72,7 +82,12 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+       _chest.text = item.measurements['chest']?.toString() ?? '';
+       _length.text = item.measurements['length']?.toString() ?? '';
+       _renderJson.text = item.tryOnJson;
++      _aiResponse.text = item.aiImportJson;
++      _audience = garmentAudiences.containsKey(item.audience)
++          ? item.audience
++          : '';
+       _category = item.category;
++      _categoryKnown = widget.id != null;
+       _active = item.isActive;
+       _metadata.addAll(item.metadata);
+       _photos.addAll(item.photos);
+@@ -97,6 +112,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+       _chest,
+       _length,
+       _renderJson,
++      _aiResponse,
+     ]) {
+       c.dispose();
+     }
+@@ -188,9 +204,11 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+               sku: _sku.text.trim(),
+               barcode: asciiDigits(_barcode.text.trim()),
+               category: _category,
++              audience: _audience,
+               isActive: _active,
+               isDraft: draft ?? _item!.isDraft,
+               tryOnJson: _renderJson.text,
++              aiImportJson: _aiResponse.text,
+               metadata: Map.of(_metadata),
+               photos: Map.of(_photos),
+               measurements: measures,
+@@ -293,75 +311,209 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+     }
+   }
+ 
+-  Future<String> _importCutout(
+-    String source, {
+-    GarmentRenderMetadata? render,
+-  }) async {
+-    final store = ref.read(assetStoreProvider);
+-    final relative = await store.importPhoto(source);
++  Future<(int, int)> _referenceSize(String relative) async {
++    final file = ref.read(assetStoreProvider).resolve(relative);
++    final buffer = await ui.ImmutableBuffer.fromFilePath(file.path);
+     try {
+-      if (Platform.isAndroid) {
+-        if (render != null) {
+-          await const LiveTryonBridge().prepareGarmentPhoto(
+-            store.resolve(relative).path,
+-            render.toNativeMap(),
+-          );
+-        } else {
+-          await const LiveTryonBridge().removeGarmentBackground(
+-            store.resolve(relative).path,
+-          );
+-        }
++      final image = await ui.ImageDescriptor.encoded(buffer);
++      try {
++        return (image.width, image.height);
++      } finally {
++        image.dispose();
+       }
+-      return relative;
+-    } catch (_) {
+-      await store.resolve(relative).delete();
+-      rethrow;
++    } finally {
++      buffer.dispose();
+     }
+   }
+ 
+-  Future<void> _removeBackground(String angle) async {
+-    final source =
+-        _photos[angle == 'front' ? 'front_source' : angle] ?? _photos[angle];
+-    if (_photoBusy || source == null) return;
+-    setState(() => _photoBusy = true);
++  List<FieldDefinition> _aiFields() =>
++      (ref.read(fieldsProvider).asData?.value ?? <FieldDefinition>[])
++          .where((f) => f.enabled && !_excluded.contains(f.key))
++          .toList();
++
++  Future<void> _copyAiPrompt() async {
++    final reference = _photos['front_source'];
++    if (reference == null) {
++      showNotice(context, 'ابتدا عکس اصلی روبرو را انتخاب کنید');
++      return;
++    }
++    setState(() => _aiBusy = true);
+     try {
+-      // Work on a fresh copy; keep the previous photo if segmentation fails.
+-      final relative = await _importCutout(
+-        ref.read(assetStoreProvider).resolve(source).path,
+-        render: angle == 'front'
+-            ? GarmentRenderMetadata.parse(_renderJson.text)
+-            : null,
++      final (width, height) = await _referenceSize(reference);
++      if (!mounted || _photos['front_source'] != reference) return;
++      final prompt = GarmentAiPrompt.build(
++        photoId: p.basename(reference),
++        width: width,
++        height: height,
++        fields: _aiFields(),
++        knownValues: {
++          'name': _name.text.trim().isEmpty ? null : _name.text.trim(),
++          'category': _categoryKnown ? _category : null,
++          'audience': _audience.isEmpty ? null : _audience,
++          'price': parseWhole(_price.text),
++          'discountPrice': parseWhole(_discount.text),
++          'stock': parseWhole(_stock.text),
++          'isActive': _active,
++          'collection': _collection.text.trim().isEmpty
++              ? null
++              : _collection.text.trim(),
++          'sku': _sku.text.trim().isEmpty ? null : _sku.text.trim(),
++          'barcode': _barcode.text.trim().isEmpty
++              ? null
++              : asciiDigits(_barcode.text.trim()),
++          'metadata': {for (final f in _aiFields()) f.key: _metadata[f.key]},
++          'measurements_mm': {
++            'chest': double.tryParse(
++              asciiDigits(_chest.text).replaceAll('٫', '.'),
++            ),
++            'length': double.tryParse(
++              asciiDigits(_length.text).replaceAll('٫', '.'),
++            ),
++          },
++        },
+       );
++      await Clipboard.setData(ClipboardData(text: prompt));
++      if (mounted)
++        showNotice(
++          context,
++          'پرامپت کپی شد؛ آن را همراه عکس مرجع به هوش مصنوعی بدهید',
++        );
++    } catch (e) {
++      if (mounted) showNotice(context, friendlyError(e));
++    } finally {
++      if (mounted) setState(() => _aiBusy = false);
++    }
++  }
++
++  Future<void> _shareReference() async {
++    final reference = _photos['front_source'];
++    if (reference == null) return;
++    try {
++      await const LiveTryonBridge().shareGarmentReference(
++        ref.read(assetStoreProvider).resolve(reference).path,
++      );
++    } catch (e) {
++      if (mounted) showNotice(context, friendlyError(e));
++    }
++  }
++
++  Future<void> _applyAiResponse() async {
++    final reference = _photos['front_source'];
++    if (reference == null) {
++      showNotice(context, 'ابتدا عکس اصلی روبرو را انتخاب کنید');
++      return;
++    }
++    _timer?.cancel();
++    setState(() {
++      _aiBusy = true;
++      _aiError = null;
++    });
++    try {
++      await _tail;
+       if (!mounted) return;
+-      _photos[angle] = relative;
++      final text = _aiResponse.text;
++      final (width, height) = await _referenceSize(reference);
++      if (!mounted || _photos['front_source'] != reference) return;
++      final response = GarmentAiImport.parse(
++        text,
++        photoId: p.basename(reference),
++        width: width,
++        height: height,
++        fields: _aiFields(),
++      );
++      // Snapshot the latest manual edits. Unknown AI values leave controllers alone.
++      final current = _item!.copyWith(
++        name: _name.text.trim().isEmpty ? 'پیش‌نویس لباس' : _name.text.trim(),
++        category: _category,
++        audience: _audience,
++        price: parseWhole(_price.text),
++        stock: parseWhole(_stock.text),
++        discountPrice: parseWhole(_discount.text),
++        clearDiscount: _discount.text.trim().isEmpty,
++        collection: _collection.text,
++        sku: _sku.text,
++        barcode: _barcode.text,
++        isActive: _active,
++        metadata: _metadata,
++        photos: _photos,
++        measurements: {
++          ..._item!.measurements,
++          if (_measurement(_chest.text) == null &&
++              _chest.text.trim().isNotEmpty)
++            'chest': double.parse(
++              asciiDigits(_chest.text).replaceAll('٫', '.'),
++            ),
++          if (_measurement(_length.text) == null &&
++              _length.text.trim().isNotEmpty)
++            'length': double.parse(
++              asciiDigits(_length.text).replaceAll('٫', '.'),
++            ),
++        },
++      );
++      final imported = response.applyTo(current);
++      // Everything above must validate before a single form value changes.
++      final values = response.values;
++      for (final entry in <String, TextEditingController>{
++        'name': _name,
++        'collection': _collection,
++        'sku': _sku,
++        'barcode': _barcode,
++        'price': _price,
++        'discountPrice': _discount,
++        'stock': _stock,
++      }.entries) {
++        if (values[entry.key] != null)
++          entry.value.text = values[entry.key].toString();
++      }
++      _category = imported.category;
++      if (values['category'] != null) _categoryKnown = true;
++      _audience = imported.audience;
++      _active = imported.isActive;
++      _metadata
++        ..clear()
++        ..addAll(imported.metadata);
++      final measurements = values['measurements_mm'] as Map;
++      if (measurements['chest'] != null)
++        _chest.text = measurements['chest'].toString();
++      if (measurements['length'] != null)
++        _length.text = measurements['length'].toString();
++      _renderJson.text = response.renderJson;
++      _aiResponse.text = response.sourceJson;
++      _item = _item!.copyWith(isDraft: true);
++      _importGeneration++;
+       _changed();
+-      await _persist(quiet: true);
+-    } catch (error) {
+-      if (mounted) showNotice(context, friendlyError(error));
++      await WidgetsBinding.instance.endOfFrame;
++      if (!mounted) return;
++      await _persist(draft: true, quiet: true);
++      if (mounted)
++        showNotice(
++          context,
++          'پاسخ اعمال شد؛ مشخصات را بررسی کنید و سپس ثبت در کاتالوگ را بزنید',
++        );
++    } on FormatException catch (e) {
++      if (mounted) setState(() => _aiError = e.message);
++    } catch (e) {
++      if (mounted) setState(() => _aiError = friendlyError(e));
+     } finally {
+-      if (mounted) setState(() => _photoBusy = false);
++      if (mounted) {
++        setState(() => _aiBusy = false);
++        if (_dirty) _scheduleAutosave();
++      }
+     }
+   }
+ 
+   Future<void> _pickPhoto(String angle, {bool camera = false}) async {
+-    if (_photoBusy) return;
++    if (_photoBusy || _aiBusy) return;
+     setState(() => _photoBusy = true);
+     String? temporaryCapture;
+     final captureRoot = p.normalize(
+       p.join(ref.read(assetStoreProvider).root.path, 'capture-temp'),
+     );
+     try {
+-      // Persist the form before leaving the activity for gallery or CameraX.
+-      // An old published photo may have lost its original canvas. Let the user
+-      // replace that photo before validating the new JSON/reference pair.
+-      final repairingReference =
+-          angle == 'front' &&
+-          _renderJson.text.trim().isNotEmpty &&
+-          _photos['front_source'] == null;
+-      if (repairingReference) {
+-        _timer?.cancel();
+-      } else if (!await _persist(quiet: true))
+-        return;
++      // Best-effort save must not prevent repairing a missing photo/JSON pair.
++      _timer?.cancel();
++      await _persist(quiet: true);
++      if (!mounted) return;
+       final String? sourcePath;
+       if (camera) {
+         temporaryCapture = await const LiveTryonBridge().captureGarment();
+@@ -373,25 +525,17 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+       }
+       if (sourcePath == null || !mounted) return;
+       final store = ref.read(assetStoreProvider);
+-      // Keep the untrimmed, orientation-normalized canvas for source-pixel JSON.
+-      final original = angle == 'front'
+-          ? await store.importPhoto(sourcePath)
+-          : null;
+-      String path;
+-      try {
+-        path = await _importCutout(
+-          sourcePath,
+-          render: angle == 'front'
+-              ? GarmentRenderMetadata.parse(_renderJson.text)
+-              : null,
+-        );
+-      } catch (_) {
+-        if (original != null) await store.resolve(original).delete();
+-        rethrow;
+-      }
++      // One untrimmed, orientation-normalized original. No segmentation service.
++      final original = await store.importPhoto(sourcePath);
+       if (!mounted) return;
+-      _photos[angle] = path;
+-      if (original != null) _photos['front_source'] = original;
++      _photos[angle] = original;
++      if (angle == 'front') {
++        _photos['front_source'] = original;
++        _renderJson.clear();
++        _aiResponse.clear();
++        _aiError = null;
++        _item = _item!.copyWith(isDraft: true);
++      }
+       _changed();
+       await _persist(quiet: true);
+     } catch (e) {
+@@ -448,7 +592,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                 Expanded(
+                   child: OutlinedButton(
+                     key: const Key('save-draft'),
+-                    onPressed: _busy || _photoBusy || !fields.hasValue
++                    onPressed:
++                        _busy || _photoBusy || _aiBusy || !fields.hasValue
+                         ? null
+                         : () => _finish(true),
+                     child: const Text('ذخیره پیش‌نویس'),
+@@ -457,7 +602,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                 const SizedBox(width: 12),
+                 Expanded(
+                   child: FilledButton(
+-                    onPressed: _busy || _photoBusy || !fields.hasValue
++                    onPressed:
++                        _busy || _photoBusy || _aiBusy || !fields.hasValue
+                         ? null
+                         : () => _finish(false),
+                     child: const Text('ثبت در کاتالوگ'),
+@@ -500,6 +646,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                         onChanged: (_) => _changed(),
+                       ),
+                       DropdownButtonFormField<String>(
++                        key: ValueKey('category-$_importGeneration'),
+                         initialValue: _category,
+                         decoration: const InputDecoration(
+                           labelText: 'دسته لباس',
+@@ -514,6 +661,29 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                             .toList(),
+                         onChanged: (v) {
+                           _category = v!;
++                          _categoryKnown = true;
++                          _changed();
++                        },
++                      ),
++                      DropdownButtonFormField<String>(
++                        key: ValueKey('audience-$_importGeneration'),
++                        initialValue: _audience,
++                        decoration: const InputDecoration(
++                          labelText: 'گروه لباس',
++                        ),
++                        items: [
++                          const DropdownMenuItem(
++                            value: '',
++                            child: Text('نامشخص'),
++                          ),
++                          for (final e in garmentAudiences.entries)
++                            DropdownMenuItem(
++                              value: e.key,
++                              child: Text(e.value),
++                            ),
++                        ],
++                        onChanged: (v) {
++                          _audience = v ?? '';
+                           _changed();
+                         },
+                       ),
+@@ -586,11 +756,11 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                         'لباس را روی زمینه ساده، با نور یکنواخت و بدون حضور مشتری عکاسی کنید. چهار نمای روبرو، پشت، چپ و راست را از گالری انتخاب کنید. برای کاتالوگ عکس روبرو ضروری است.',
+                       ),
+                       const Text(
+-                        'لباس را به‌تنهایی، بدون پوشیدن و با فاصله از پس‌زمینه عکس بگیرید. پس‌زمینه خودکار حذف می‌شود؛ اولین بار اینترنت و سرویس‌های گوگل لازم است.',
++                        'عکس اصلی حفظ می‌شود. برای پرو زنده، مرز لباس و یقه فقط از JSON خوانده می‌شود. تعویض عکس روبرو به JSON تازه نیاز دارد.',
+                       ),
+                       if (_photoBusy) ...[
+                         const LinearProgressIndicator(),
+-                        const Text('در حال آماده‌سازی عکس و حذف پس‌زمینه…'),
++                        const Text('در حال آماده‌سازی عکس اصلی…'),
+                       ],
+                       for (final angle in photoAngles.entries)
+                         Column(
+@@ -635,23 +805,21 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                                   icon: const Icon(Icons.photo_camera_outlined),
+                                   label: const Text('عکس با دوربین'),
+                                 ),
+-                                if (Platform.isAndroid &&
+-                                    _photos[angle.key] != null)
+-                                  OutlinedButton.icon(
+-                                    onPressed: _photoBusy
+-                                        ? null
+-                                        : () => _removeBackground(angle.key),
+-                                    icon: const Icon(Icons.auto_fix_high),
+-                                    label: const Text('حذف پس‌زمینه'),
+-                                  ),
+                                 if (_photos[angle.key] != null)
+                                   TextButton(
+                                     onPressed: _photoBusy
+                                         ? null
+                                         : () {
+                                             _photos.remove(angle.key);
+-                                            if (angle.key == 'front')
++                                            if (angle.key == 'front') {
+                                               _photos.remove('front_source');
++                                              _renderJson.clear();
++                                              _aiResponse.clear();
++                                              _aiError = null;
++                                              _item = _item!.copyWith(
++                                                isDraft: true,
++                                              );
++                                            }
+                                             _changed();
+                                           },
+                                     child: const Text('برداشتن عکس'),
+@@ -663,11 +831,77 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                     ],
+                   ),
+                   const SizedBox(height: 20),
++                  SectionCard(
++                    title: 'دریافت مشخصات از هوش مصنوعی',
++                    children: [
++                      const Text(
++                        '۱. عکس روبرو را انتخاب کنید. ۲. پرامپت را کپی کنید و همراه همان عکس مرجع به هوش مصنوعی بدهید. ۳. JSON خروجی را اینجا بچسبانید و اعمال کنید. ارسال خودکار انجام نمی‌شود.',
++                      ),
++                      Wrap(
++                        spacing: 8,
++                        runSpacing: 8,
++                        children: [
++                          OutlinedButton.icon(
++                            key: const Key('copy-ai-prompt'),
++                            onPressed: _aiBusy || _photoBusy
++                                ? null
++                                : _copyAiPrompt,
++                            icon: const Icon(Icons.copy),
++                            label: const Text('کپی سیستم پرامپت'),
++                          ),
++                          if (Platform.isAndroid &&
++                              _photos['front_source'] != null)
++                            OutlinedButton.icon(
++                              onPressed: _photoBusy || _aiBusy
++                                  ? null
++                                  : _shareReference,
++                              icon: const Icon(Icons.share_outlined),
++                              label: const Text('اشتراک عکس مرجع'),
++                            ),
++                        ],
++                      ),
++                      const Text(
++                        'قیمت، موجودی و اندازهٔ واقعی از عکس حدس زده نمی‌شوند. مقدار نامعلوم اطلاعات دستی شما را پاک نمی‌کند.',
++                      ),
++                      TextFormField(
++                        key: const Key('garment-ai-response'),
++                        controller: _aiResponse,
++                        minLines: 5,
++                        maxLines: 10,
++                        maxLength: GarmentRenderMetadata.maxCharacters,
++                        textDirection: TextDirection.ltr,
++                        autocorrect: false,
++                        enableSuggestions: false,
++                        keyboardType: TextInputType.multiline,
++                        decoration: InputDecoration(
++                          labelText: 'پاسخ کامل هوش مصنوعی (JSON)',
++                          alignLabelWithHint: true,
++                          counterText: '',
++                          errorText: _aiError,
++                          errorMaxLines: 5,
++                        ),
++                        onChanged: (_) {
++                          setState(() => _aiError = null);
++                          _changed();
++                        },
++                      ),
++                      FilledButton.icon(
++                        key: const Key('apply-ai-response'),
++                        onPressed: _aiBusy || _photoBusy
++                            ? null
++                            : _applyAiResponse,
++                        icon: const Icon(Icons.playlist_add_check),
++                        label: const Text('اعمال JSON و پرکردن فرم'),
++                      ),
++                      if (_aiBusy) const LinearProgressIndicator(),
++                    ],
++                  ),
++                  const SizedBox(height: 20),
+                   SectionCard(
+                     title: 'اطلاعات پرو زنده',
+                     children: [
+                       const Text(
+-                        'JSON مشخصات همین عکس روبرو را اینجا کپی کنید. این بخش اختیاری است؛ در پرو زنده برای برش یقه، نقاط اتصال و آستین‌ها استفاده می‌شود.',
++                        'این JSON با اعمال پاسخ هوش مصنوعی پر می‌شود و برای ثبت نهایی ضروری است. برای ویرایش دستی نیز می‌توانید JSON پرو را اینجا تغییر دهید؛ پیش‌نویس بدون آن قابل ذخیره است.',
+                       ),
+                       TextFormField(
+                         key: const Key('garment-render-json'),
+@@ -713,7 +947,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                     title: 'مشخصات لباس',
+                     children: [
+                       const Text(
+-                        'اطلاعات این بخش توسط شما ثبت می‌شوند؛ تحلیل هوش مصنوعی هنوز متصل نیست.',
++                        'پس از اعمال پاسخ، مشخصات تشخیص‌داده‌شده پر می‌شوند؛ می‌توانید آن‌ها را بررسی و ویرایش کنید.',
+                       ),
+                       for (final field in definitions.where(
+                         (f) => f.enabled || _metadata.containsKey(f.key),
+@@ -741,7 +975,9 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                             crossAxisAlignment: CrossAxisAlignment.stretch,
+                             children: [
+                               DynamicField(
+-                                key: ValueKey(field.key),
++                                key: ValueKey(
++                                  '${field.key}-$_importGeneration',
++                                ),
+                                 definition: field,
+                                 value: _metadata[field.key],
+                                 onChanged: (v) {
+diff --git a/apps/store_app/lib/presentation/live_tryon_screen.dart b/apps/store_app/lib/presentation/live_tryon_screen.dart
+index 90bd29a..183941b 100644
+--- a/apps/store_app/lib/presentation/live_tryon_screen.dart
++++ b/apps/store_app/lib/presentation/live_tryon_screen.dart
+@@ -1,6 +1,5 @@
+ import 'dart:async';
+ import 'dart:io';
+-import 'dart:math' as math;
+ 
+ import 'package:flutter/material.dart';
+ import 'package:flutter/services.dart';
+@@ -123,21 +122,12 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+     if (mounted) setState(() => _error = _message(error));
+   }
+ 
+-  List<Garment> _eligible(List<Garment>? all) => (all ?? const <Garment>[])
+-      .where(
+-        (g) =>
+-            !g.isDraft &&
+-            g.isActive &&
+-            !g.archived &&
+-            g.stock > 0 &&
+-            g.photos['front'] != null,
+-      )
+-      .toList();
++  List<Garment> _eligible(List<Garment>? all) =>
++      (all ?? const <Garment>[]).where((g) => g.tryOnEligible).toList();
+ 
+   String? _photoPath(Garment? garment) {
+     if (garment == null) return null;
+-    final relative = garment
+-        .photos[garment.tryOnJson.trim().isNotEmpty ? 'front_source' : 'front'];
++    final relative = garment.photos['front_source'];
+     if (relative == null) return null;
+     try {
+       return ref.read(assetStoreProvider).resolve(relative).path;
+@@ -164,15 +154,12 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+     await _bridge.setVotingEnabled(false);
+     final render = GarmentRenderMetadata.parse(garment?.tryOnJson ?? '');
+     final photo = _photoPath(garment);
+-    if (garment != null && render != null && photo == null) {
++    if (garment != null && (render == null || photo == null)) {
+       await _bridge.setGarment(null);
+       throw StateError(
+-        'عکس اصلی این لباس موجود نیست؛ عکس روبرو را در فرم لباس دوباره انتخاب کنید.',
++        'JSON معتبر یا عکس اصلی این لباس موجود نیست؛ مشخصات و عکس روبرو را در فرم لباس تکمیل کنید.',
+       );
+     }
+-    if (photo != null && mounted && render == null) {
+-      await precacheImage(FileImage(File(photo)), context);
+-    }
+     if (!mounted || session != _session || !_running) return;
+     await _bridge.setGarment(photo, renderMetadata: render?.toNativeMap());
+     await _bridge.setGarmentGhost(_debugEnabled && _debugGhost);
+@@ -524,7 +511,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+   Widget build(BuildContext context) {
+     final available = _eligible(ref.watch(catalogProvider).value);
+     final selected = available.where((g) => g.id == _garmentId).firstOrNull;
+-    final photo = _photoPath(selected);
+     final placement = _placement;
+     final visible =
+         _running &&
+@@ -542,46 +528,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+             viewType: 'ir.bootic.store_app/live_scene',
+             onPlatformViewCreated: (_) => unawaited(_start()),
+           ),
+-        if (visible &&
+-            photo != null &&
+-            selected?.tryOnJson.trim().isNotEmpty != true)
+-          Positioned.fill(
+-            child: LayoutBuilder(
+-              builder: (context, box) => Stack(
+-                children: [
+-                  Positioned(
+-                    left:
+-                        box.maxWidth *
+-                        (placement!.centerX - placement.width / 2),
+-                    top:
+-                        box.maxHeight *
+-                        (placement.centerY - placement.height / 2),
+-                    width: box.maxWidth * placement.width,
+-                    height: box.maxHeight * placement.height,
+-                    child: IgnorePointer(
+-                      child: Opacity(
+-                        opacity: _debugEnabled && _debugGhost ? 0.3 : 1,
+-                        child: Transform.rotate(
+-                          angle: placement.rotationDegrees * math.pi / 180,
+-                          child: Transform(
+-                            alignment: Alignment.center,
+-                            transform: Matrix4.rotationY(
+-                              _frontCamera ? math.pi : 0,
+-                            ),
+-                            child: Image.file(
+-                              File(photo),
+-                              fit: BoxFit.fill,
+-                              errorBuilder: (_, _, _) => const SizedBox(),
+-                            ),
+-                          ),
+-                        ),
+-                      ),
+-                    ),
+-                  ),
+-                ],
+-              ),
+-            ),
+-          ),
+         if (_debugEnabled)
+           Positioned.fill(
+             child: TryonDebugOverlay(
+diff --git a/apps/store_app/test/garment_ai_import_test.dart b/apps/store_app/test/garment_ai_import_test.dart
+new file mode 100644
+index 0000000..804159d
+--- /dev/null
++++ b/apps/store_app/test/garment_ai_import_test.dart
+@@ -0,0 +1,11 @@
++import 'package:flutter_test/flutter_test.dart';
++import '../tool/check_ai_import.dart';
++
++void main() {
++  test(
++    'AI import validates, populates and persists the complete form safely',
++    () {
++      expect(runAiImportChecks(), greaterThanOrEqualTo(40));
++    },
++  );
++}
+diff --git a/apps/store_app/tool/check_ai_import.dart b/apps/store_app/tool/check_ai_import.dart
+new file mode 100644
+index 0000000..f141089
+--- /dev/null
++++ b/apps/store_app/tool/check_ai_import.dart
+@@ -0,0 +1,313 @@
++import 'dart:convert';
++import 'dart:io';
++import '../lib/domain/garment.dart';
++import '../lib/domain/field_definition.dart';
++import '../lib/domain/garment_ai_import.dart';
++import '../lib/domain/garment_ai_prompt.dart';
++
++int runAiImportChecks() {
++  var checks = 0;
++  void check(bool condition, String message) {
++    checks++;
++    if (!condition) throw StateError(message);
++  }
++
++  final geometry =
++      jsonDecode(
++            File(
++              'test/fixtures/striped_tshirt_metadata.json',
++            ).readAsStringSync(),
++          )
++          as Map<String, dynamic>;
++  final fields = [
++    ...baseFields,
++    const FieldDefinition(
++      key: 'custom.size',
++      label: 'سایز',
++      type: FieldType.singleSelect,
++      options: ['S', 'M', 'L'],
++    ),
++    const FieldDefinition(
++      key: 'custom.count',
++      label: 'شمار',
++      type: FieldType.integer,
++    ),
++    const FieldDefinition(
++      key: 'custom.rating',
++      label: 'امتیاز',
++      type: FieldType.score,
++    ),
++    const FieldDefinition(
++      key: 'custom.disabled',
++      label: 'غیرفعال',
++      type: FieldType.text,
++      enabled: false,
++    ),
++  ];
++  Map<String, dynamic> payload() => {
++    'schema_version': GarmentAiImport.schema,
++    'photo_id': 'reference.png',
++    'garment': <String, dynamic>{
++      'name': 'تیشرت راه‌راه',
++      'category': 'top',
++      'audience': 'unisex',
++      'collection': null,
++      'sku': null,
++      'barcode': null,
++      'price': null,
++      'discountPrice': null,
++      'stock': null,
++      'isActive': null,
++      'metadata': <String, dynamic>{
++        'primaryColor': 'سفید',
++        'pattern': 'راه‌راه',
++        'styles': ['روزمره'],
++        'custom.size': 'M',
++        'custom.count': 2,
++        'custom.rating': .8,
++      },
++      'measurements_mm': <String, dynamic>{'chest': null, 'length': null},
++    },
++    'try_on': jsonDecode(jsonEncode(geometry)),
++  };
++  GarmentAiImport parse(Map<String, dynamic> input) => GarmentAiImport.parse(
++    jsonEncode(input),
++    photoId: 'reference.png',
++    width: 1152,
++    height: 1536,
++    fields: fields,
++  );
++  void rejects(Map<String, dynamic> input, String label) {
++    try {
++      parse(input);
++    } on FormatException {
++      checks++;
++      return;
++    }
++    throw StateError('Invalid response accepted: $label');
++  }
++
++  final base = Garment.create(id: 'g', name: 'دستی').copyWith(
++    price: 58000,
++    stock: 7,
++    discountPrice: 50000,
++    sku: 'manual-sku',
++    metadata: {'material': 'کتان', 'custom.old': 'نگه دار'},
++    measurements: {'chest': 420},
++    photos: {
++      'front': 'garments/reference.png',
++      'front_source': 'garments/reference.png',
++    },
++  );
++  final published = base.copyWith(isDraft: false);
++  check(
++    published.validate().any((e) => e.contains('JSON')),
++    'Publishing without JSON accepted',
++  );
++  check(
++    !published.tryOnEligible,
++    'Legacy image entered live try-on without JSON',
++  );
++  check(base.validate().isEmpty, 'Incomplete draft rejected');
++  final before = jsonEncode(base.toJson());
++  final imported = parse(payload()).applyTo(base);
++  check(
++    imported.name == 'تیشرت راه‌راه' && imported.audience == 'unisex',
++    'Catalog properties not imported',
++  );
++  check(
++    imported.price == 58000 &&
++        imported.stock == 7 &&
++        imported.discountPrice == 50000,
++    'Unknown AI amounts overwrote manual values',
++  );
++  check(
++    imported.measurements['chest'] == 420,
++    'Unknown AI measurement erased manual value',
++  );
++  check(
++    imported.metadata['material'] == 'کتان' &&
++        imported.metadata['custom.old'] == 'نگه دار',
++    'Unspecified manual metadata lost',
++  );
++  check(
++    imported.metadata['pattern'] == 'راه‌راه' &&
++        imported.metadata['custom.size'] == 'M',
++    'Typed metadata did not populate',
++  );
++  check(
++    jsonEncode(base.toJson()) == before,
++    'Import mutated the original garment',
++  );
++  check(
++    imported.tryOnJson == jsonEncode(geometry),
++    'Render geometry was altered',
++  );
++  check(
++    jsonDecode(imported.aiImportJson)['photo_id'] == 'reference.png',
++    'Full response was not retained',
++  );
++  check(imported.isDraft, 'AI published without operator review');
++  check(
++    imported.copyWith(isDraft: false).tryOnEligible,
++    'Valid JSON/source pair is not eligible',
++  );
++  check(
++    imported.copyWith(isDraft: false, stock: 0).tryOnEligible == false,
++    'Zero stock entered customer flow',
++  );
++  final noSource = imported.copyWith(
++    isDraft: false,
++    photos: {'front': 'cutout.png'},
++  );
++  check(
++    noSource.validate().any((e) => e.contains('عکس اصلی')) &&
++        !noSource.tryOnEligible,
++    'Missing source accepted',
++  );
++  final archived = published.copyWith(archived: true, isActive: false);
++  check(
++    archived.validate().isEmpty,
++    'Legacy item cannot be archived without deleting it',
++  );
++  final old = base.toJson()
++    ..remove('audience')
++    ..remove('aiImportJson')
++    ..remove('tryOnJson');
++  final legacy = Garment.fromJson(old);
++  check(
++    legacy.audience.isEmpty && legacy.aiImportJson.isEmpty,
++    'Legacy payload failed to load',
++  );
++  final restored = Garment.fromJson(jsonDecode(jsonEncode(imported.toJson())));
++  check(
++    restored.audience == 'unisex' &&
++        restored.tryOnJson == imported.tryOnJson &&
++        restored.aiImportJson == imported.aiImportJson,
++    'Round-trip lost new data',
++  );
++  for (final audience in garmentAudiences.keys) {
++    final input = payload();
++    (input['garment'] as Map)['audience'] = audience;
++    check(
++      parse(input).applyTo(base).audience == audience,
++      'Audience $audience failed',
++    );
++  }
++  final amounts = payload();
++  (amounts['garment'] as Map).addAll(<String, dynamic>{
++    'price': 100000,
++    'discountPrice': 90000,
++    'stock': 0,
++    'isActive': false,
++    'measurements_mm': {'chest': 450, 'length': 700},
++  });
++  final known = parse(amounts).applyTo(base);
++  check(
++    known.price == 100000 &&
++        known.stock == 0 &&
++        !known.isActive &&
++        known.measurements['length'] == 700,
++    'Explicit amounts/false/zero were ignored',
++  );
++  final unknownAudience = payload();
++  (unknownAudience['garment'] as Map)['audience'] = null;
++  check(
++    parse(unknownAudience).applyTo(base.copyWith(audience: 'women')).audience ==
++        'women',
++    'Unknown audience overwrote manual group',
++  );
++  final fenced = GarmentAiImport.parse(
++    '```json\n${jsonEncode(payload())}\n```',
++    photoId: 'reference.png',
++    width: 1152,
++    height: 1536,
++    fields: fields,
++  );
++  check(
++    fenced.applyTo(base).name == imported.name,
++    'Single fenced JSON not supported',
++  );
++  for (final mutation in <String, void Function(Map<String, dynamic>)>{
++    'wrong schema': (p) => p['schema_version'] = 'future',
++    'stale photo': (p) => p['photo_id'] = 'other.png',
++    'missing field': (p) => (p['garment'] as Map).remove('stock'),
++    'extra field': (p) => (p['garment'] as Map)['execute'] = 'code',
++    'negative stock': (p) => (p['garment'] as Map)['stock'] = -1,
++    'decimal price': (p) => (p['garment'] as Map)['price'] = 12.5,
++    'too many stock': (p) => (p['garment'] as Map)['stock'] = 1000000,
++    'invalid audience': (p) => (p['garment'] as Map)['audience'] = 'unknown',
++    'invalid category': (p) => (p['garment'] as Map)['category'] = 'invented',
++    'invalid option': (p) =>
++        (p['garment']['metadata'] as Map)['custom.size'] = 'XL',
++    'wrong integer': (p) =>
++        (p['garment']['metadata'] as Map)['custom.count'] = '2',
++    'score outside range': (p) =>
++        (p['garment']['metadata'] as Map)['custom.rating'] = 1.5,
++    'disabled field': (p) =>
++        (p['garment']['metadata'] as Map)['custom.disabled'] = 'bad',
++    'unknown custom field': (p) =>
++        (p['garment']['metadata'] as Map)['custom.missing'] = 'bad',
++    'invalid measurement': (p) =>
++        (p['garment']['measurements_mm'] as Map)['length'] = 0,
++    'wrong dimensions': (p) =>
++        (p['try_on']['source'] as Map)['width_px'] = 2000,
++    'out of bounds': (p) =>
++        (p['try_on']['landmarks_px'] as Map)['hem_center'] = [99999, 0],
++    'missing render': (p) => p.remove('try_on'),
++  }.entries) {
++    final p = payload();
++    mutation.value(p);
++    rejects(p, mutation.key);
++  }
++  final badDiscount = payload();
++  (badDiscount['garment'] as Map).addAll(<String, dynamic>{
++    'price': 100,
++    'discountPrice': 200,
++  });
++  var discountRejected = false;
++  try {
++    parse(badDiscount).applyTo(base);
++  } on FormatException {
++    discountRejected = true;
++  }
++  check(
++    discountRejected && jsonEncode(base.toJson()) == before,
++    'Commercial validation did not reject import atomically',
++  );
++  final prompt = GarmentAiPrompt.build(
++    photoId: 'reference.png',
++    width: 1152,
++    height: 1536,
++    fields: fields,
++    knownValues: {'price': 58000},
++  );
++  check(
++    prompt.contains('reference.png') &&
++        prompt.contains('1152') &&
++        prompt.contains('1536'),
++    'Prompt omitted image identity/dimensions',
++  );
++  check(
++    prompt.contains('custom.size') &&
++        prompt.contains('"M"') &&
++        !prompt.contains('custom.disabled'),
++    'Prompt omitted active custom schema or included disabled fields',
++  );
++  check(
++    prompt.contains('left_sleeve_hem_center') &&
++        prompt.contains('neck binding') &&
++        prompt.contains(GarmentAiImport.schema),
++    'Prompt omitted render/parser contract',
++  );
++  check(
++    prompt.contains('58000') &&
++        prompt.contains('unknown') &&
++        prompt.contains('WHOLE TOMAN'),
++    'Prompt omitted manual context and units',
++  );
++  print('AI form import: $checks checks passed');
++  return checks;
++}
++
++void main() => runAiImportChecks();
+diff --git a/docs/garment-ai-form.md b/docs/garment-ai-form.md
+new file mode 100644
+index 0000000..e79cfab
+--- /dev/null
++++ b/docs/garment-ai-form.md
+@@ -0,0 +1,47 @@
++# فرم لباس با JSON اجباری و انتقال دستی هوش مصنوعی
++
++این سند جایگزین توضیح «JSON اختیاری» در راهنمای قدیمی JSON است.
++
++## نصب
++
++پچ افزایشی `bootic-ai-form.patch` روی commit `47e9ffe` (نسخهٔ دارای JSON) ساخته شده و با نصب بودن پچ `bootic-shoulder-edge-fit.patch` نیز سازگار است. شامل تکرار پچ JSON یا اصلاح شانه نیست.
++
++```sh
++git apply --check ./bootic-ai-form.patch
++git apply ./bootic-ai-form.patch
++```
++
++فقط پس از موفقیت دستور اول، دومی را اجرا کنید. مانند همیشه پس از اعمال، APK جدید را بیلد کنید. این پچ کلید امضا، شناسهٔ برنامه، شمارهٔ نسخه یا گردش انتشار را تغییر نمی‌دهد.
++
++## جریان کار
++
++۱. در فرم لباس عکس اصلی روبرو را انتخاب کنید یا با دوربین عکس بگیرید. عکس بدون حذف پس‌زمینه وارد می‌شود؛ جهت EXIF اصلاح و نسبت کادر حفظ می‌شود.
++۲. «کپی سیستم پرامپت» را بزنید. پرامپت شامل شناسه/ابعاد همین عکس، تمام فیلدهای فعال فرم، گزینه‌های دقیق مشخصه‌های سفارشی و اطلاعات دستی فعلی است.
++۳. «اشتراک عکس مرجع» روی اندروید همان عکس واردشده را در پنجرهٔ اشتراک سیستم باز می‌کند. آن را به هوش مصنوعی دلخواه بدهید و پرامپت کپی‌شده را هم بچسبانید. اپ خودش عکس یا پرامپت را ارسال نمی‌کند و API/کلید هوش مصنوعی نمی‌خواهد.
++۴. پاسخ کامل را در «پاسخ کامل هوش مصنوعی (JSON)» بچسبانید و «اعمال JSON و پرکردن فرم» را بزنید.
++۵. اطلاعات فرم، مشخصات سفارشی و JSON پرو زنده پر می‌شوند. خروجی به‌صورت پیش‌نویس ذخیره می‌شود؛ مشخصات را بررسی کنید و «ثبت در کاتالوگ» را بزنید.
++
++ورودی اجباری AI یک شیء با `schema_version: bootic.garment-import/1` و سه بخش `photo_id`، `garment` و `try_on` است. `try_on` همان قرارداد عددی قبلی `bootic.garment-metadata/0.1` است. فقط این قسمت به رندر اندرویدی داده می‌شود؛ پاسخ کامل نیز کنار لباس ذخیره می‌شود.
++
++## اعتبارسنجی و نگهداری اطلاعات
++
++- ثبت نهایی و پرو زنده بدون JSON معتبر و عکس اصلی ممکن نیست. پیش‌نویس ناقص برای انجام مراحل بالا مجاز است.
++- پاسخ مربوط به شناسهٔ عکس دیگر یا ابعاد ناسازگار رد می‌شود. تعویض/حذف عکس روبرو، JSON و پاسخ قبلی را پاک و لباس را پیش‌نویس می‌کند؛ مشخصات دستی لباس باقی می‌مانند.
++- پاسخ قبل از اعمال بررسی می‌شود: مختصات و چندضلعی‌ها، نوع مشخصه‌های فرم، گزینه‌های انتخابی، محدودهٔ عددی و سازگاری قیمت تخفیف. پاسخ نامعتبر بخشی از فرم را تغییر نمی‌دهد.
++- مقدار `null` یعنی نامعلوم و مقدار دستی قبلی را پاک نمی‌کند. مقدار واقعی صفر یا false حفظ می‌شود. پاک‌کردن دستی فیلدها همچنان ممکن است.
++- قیمت و تخفیف بر حسب تومان، اندازه‌ها بر حسب میلی‌متر هستند. قیمت، موجودی، اندازهٔ واقعی و اطلاعات نامعلوم از ظاهر عکس حدس زده نمی‌شوند؛ اپ یک عکس را به اندازه‌گیری فیزیکی معتبر تبدیل نمی‌کند.
++- گروه لباس شامل مردانه، زنانه، دخترانه، پسرانه و یونیسکس است. «نامشخص» برای دادهٔ قدیمی یا ابهام در تشخیص باقی است؛ یونیسکس پیش‌فرضِ نامعلوم نیست.
++- دادهٔ لباس‌های قدیمی حذف نمی‌شود و مهاجرت دیتابیس نیاز نیست. لباس قدیمی بدون JSON/عکس اصلی، در فهرست و ویرایش باقی است اما در پرو زنده نمی‌آید. برای استفاده، عکس اصلی و JSON را تکمیل کنید. آرشیو کردن رکورد قدیمی همچنان ممکن است.
++- JSON رندر به‌صورت دستی هم قابل ویرایش است. فیلد پاسخ کامل فقط با دکمهٔ اعمال تفسیر می‌شود؛ چسباندن پاسخ به‌تنهایی فرم را تغییر نمی‌دهد.
++
++## حذف سرویس شفاف‌سازی
++
++دکمه و مسیر خودکار حذف پس‌زمینه، کلاس `GarmentCutout`، وابستگی ML Kit Subject Segmentation و اعلان دانلود آن از Manifest حذف شدند. پردازش عکس و ذخیرهٔ آن سرویس شفاف‌سازی ندارد. عکس‌های قدیمی عمداً دستکاری نمی‌شوند.
++
++ساخت ماسک از چندضلعی‌های JSON داخل رندر پرو باقی است؛ این همان استفاده از مرزهای JSON است و سرویس مستقل حذف پس‌زمینه نیست. ماسک بدن مشتری در پچ شانه نیز مستقل از عکس محصول است و حذف نمی‌شود.
++
++## آزمون
++
++ابزار `tool/check_ai_import.dart` قرارداد کامل، پرکردن مشخصات، حفظ null/صفر/false، همهٔ گروه‌های لباس، ذخیره/بازیابی، دادهٔ قدیمی، الزام JSON، عکس اشتباه، ابعاد/نقاط نامعتبر، گزینهٔ سفارشی، قیمت/موجودی/اندازهٔ نامعتبر و عدم تغییر جزئی فرم را بررسی می‌کند. همان ابزار در مجموعهٔ Flutter test نیز فراخوانی می‌شود. ابزار قبلی `tool/check_render_metadata.dart` نیز نگه داشته شده است.
++
++بیلد کامل Flutter/APK و رفتار واقعی کلیپ‌بورد و پنجرهٔ اشتراک روی گوشی باید بررسی شود؛ این‌ها با آزمون خالص Dart اثبات نمی‌شوند.

@@ -7,6 +7,13 @@ const garmentCategories = {
   'trousers': 'شلوار',
   'skirt': 'دامن',
 };
+const garmentAudiences = {
+  'men': 'مردانه',
+  'women': 'زنانه',
+  'girls': 'دخترانه',
+  'boys': 'پسرانه',
+  'unisex': 'یونیسکس',
+};
 const photoAngles = {
   'front': 'روبرو',
   'back': 'پشت',
@@ -20,6 +27,7 @@ class Garment {
     required this.name,
     this.localRevision = 0,
     this.category = 'top',
+    this.audience = '',
     this.collection = '',
     this.sku = '',
     this.barcode = '',
@@ -35,6 +43,7 @@ class Garment {
     Set<String> excludedFields = const {},
     this.processingStatus = 'notRequested',
     this.tryOnJson = '',
+    this.aiImportJson = '',
     required this.createdAt,
     required this.updatedAt,
   }) : metadata = Map.unmodifiable(metadata),
@@ -48,7 +57,7 @@ class Garment {
   }
 
   final String id, name, category, collection, sku, barcode, processingStatus;
-  final String tryOnJson;
+  final String tryOnJson, aiImportJson, audience;
   final int localRevision, price, stock;
   final int? discountPrice;
   final bool isActive, isDraft, archived;
@@ -58,11 +67,21 @@ class Garment {
   final Set<String> excludedFields;
   final DateTime createdAt, updatedAt;
 
-  // A local catalog photo is never a validated rendering asset.
-  bool get tryOnEligible => false;
+  bool get tryOnEligible =>
+      !isDraft &&
+      isActive &&
+      !archived &&
+      stock > 0 &&
+      photos['front'] != null &&
+      photos['front_source'] != null &&
+      tryOnJson.trim().isNotEmpty &&
+      renderMetadataError == null;
   int get effectivePrice => discountPrice ?? price;
 
-  String? get renderMetadataError {
+  // Garments are immutable; avoid parsing large JSON on every camera UI frame.
+  late final String? renderMetadataError = _checkRenderMetadata();
+
+  String? _checkRenderMetadata() {
     try {
       GarmentRenderMetadata.parse(tryOnJson);
       return null;
@@ -73,9 +92,15 @@ class Garment {
 
   List<String> validate() => [
     if (renderMetadataError case final String error) error,
+    if (aiImportJson.length > GarmentRenderMetadata.maxCharacters)
+      'حجم پاسخ هوش مصنوعی بیش از حد مجاز است',
     if (name.trim().isEmpty) 'نام لباس را وارد کنید',
     if (name.length > 120) 'نام لباس حداکثر ۱۲۰ نویسه است',
     if (!garmentCategories.containsKey(category)) 'دسته لباس نامعتبر است',
+    if (audience.isNotEmpty && !garmentAudiences.containsKey(audience))
+      'گروه لباس نامعتبر است',
+    if (!isDraft && !archived && tryOnJson.trim().isEmpty)
+      'برای ثبت لباس، JSON پرو زنده ضروری است',
     if (price < 0) 'قیمت نمی‌تواند منفی باشد',
     if (price > 999999999999) 'قیمت از سقف مجاز بیشتر است',
     if (discountPrice != null &&
@@ -85,9 +110,7 @@ class Garment {
     if (stock > 999999) 'موجودی از سقف مجاز بیشتر است',
     if (measurements.values.any((v) => !v.isFinite || v <= 0 || v > 10000))
       'اندازه باید بین صفر و ۱۰۰۰۰ میلی‌متر باشد',
-    if (!isDraft &&
-        tryOnJson.trim().isNotEmpty &&
-        photos['front_source'] == null)
+    if (!isDraft && !archived && photos['front_source'] == null)
       'برای پرو با JSON، عکس اصلی روبرو را دوباره انتخاب کنید',
     if (!isDraft && photos['front'] == null)
       'برای ثبت در کاتالوگ عکس روبرو لازم است',
@@ -96,6 +119,7 @@ class Garment {
   Garment copyWith({
     String? name,
     String? category,
+    String? audience,
     String? collection,
     String? sku,
     String? barcode,
@@ -113,11 +137,13 @@ class Garment {
     Set<String>? excludedFields,
     String? processingStatus,
     String? tryOnJson,
+    String? aiImportJson,
     DateTime? updatedAt,
   }) => Garment(
     id: id,
     name: name ?? this.name,
     category: category ?? this.category,
+    audience: audience ?? this.audience,
     collection: collection ?? this.collection,
     sku: sku ?? this.sku,
     barcode: barcode ?? this.barcode,
@@ -134,6 +160,7 @@ class Garment {
     excludedFields: excludedFields ?? this.excludedFields,
     processingStatus: processingStatus ?? this.processingStatus,
     tryOnJson: tryOnJson ?? this.tryOnJson,
+    aiImportJson: aiImportJson ?? this.aiImportJson,
     createdAt: createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -158,6 +185,8 @@ class Garment {
     'excludedFields': excludedFields.toList(),
     'processingStatus': processingStatus,
     'tryOnJson': tryOnJson,
+    'aiImportJson': aiImportJson,
+    'audience': audience,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
   };
@@ -183,6 +212,8 @@ class Garment {
     excludedFields: Set<String>.from(j['excludedFields'] as List),
     processingStatus: j['processingStatus'] as String,
     tryOnJson: j['tryOnJson'] as String? ?? '',
+    aiImportJson: j['aiImportJson'] as String? ?? '',
+    audience: j['audience'] as String? ?? '',
     createdAt: DateTime.parse(j['createdAt'] as String),
     updatedAt: DateTime.parse(j['updatedAt'] as String),
   );

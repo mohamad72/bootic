@@ -37,6 +37,7 @@ internal data class PoseObservation(
     val imageWidth: Int, val imageHeight: Int,
     val personFrame: PersonFrame? = null,
     val shoulderPx: Float = 0f, val torsoPx: Float = 0f,
+    val bodyEdges: BodyEdges? = null, val edgeMs: Long = 0,
 )
 
 internal object PoseGeometry {
