@@ -60,6 +60,8 @@ class MainActivity : FlutterActivity() {
     private val voteGate = GestureVoteGate()
     private var garment: Bitmap? = null
     private var placement = Placement()
+    private var sceneEffect = EffectMode.NONE
+    private var phoneEffects: TryonEffectsView? = null
     @Volatile private var autoPlacement = false
     private var autoGeneration = 0
     private var poseVisible = false
@@ -135,6 +137,8 @@ class MainActivity : FlutterActivity() {
         cameraExecutor.shutdown()
         pendingCapture?.success(null)
         pendingCapture = null
+        phoneEffects?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+        phoneEffects = null
         channel?.setMethodCallHandler(null)
         eventChannel?.setStreamHandler(null)
         super.onDestroy()
@@ -178,6 +182,14 @@ class MainActivity : FlutterActivity() {
         when (call.method) {
             "start" -> startCamera(result)
             "setCameraFacing" -> setCameraFacing(call, result)
+            "setSceneEffect" -> {
+                val effect = EffectMode.entries.firstOrNull { it.wireName == call.argument<String>("effect") }
+                if (effect == null) result.error("BAD_EFFECT", "افکت نامعتبر است", null)
+                else {
+                    applySceneEffect(effect)
+                    result.success(effect.durationMs)
+                }
+            }
             "removeGarmentBackground" -> GarmentCutout(this, cameraExecutor)
                 .process(call.argument<String>("path"), result)
             "setVotingEnabled" -> {
@@ -219,6 +231,7 @@ class MainActivity : FlutterActivity() {
                             it.setPlacement(placement)
                             it.setMirror(mirror)
                             it.setPoseVisible(!autoPlacement)
+                            it.setSceneEffect(sceneEffect)
                         }
                         result.success(null)
                     } catch (_: Exception) {
@@ -272,6 +285,20 @@ class MainActivity : FlutterActivity() {
             }
             else -> result.notImplemented()
         }
+    }
+
+    private fun applySceneEffect(effect: EffectMode) {
+        sceneEffect = effect
+        if (effect != EffectMode.NONE && phoneEffects == null) {
+            val decor = window.decorView as? android.view.ViewGroup
+            if (decor != null) {
+                phoneEffects = TryonEffectsView(this).also {
+                    decor.addView(it, android.view.ViewGroup.LayoutParams(-1, -1))
+                }
+            }
+        }
+        phoneEffects?.setEffect(effect)
+        presentation?.setSceneEffect(effect)
     }
 
     private fun MethodCall.number(key: String): Double? = (argument<Number>(key))?.toDouble()
@@ -446,6 +473,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun hidePose() {
+        phoneEffects?.setPerson(null, 1, 1, previewView)
         if (!autoPlacement) return
         presentation?.setPoseVisible(false)
         if (poseVisible) {
@@ -463,6 +491,7 @@ class MainActivity : FlutterActivity() {
         val phonePlacement = box.forViewport(phone.width, phone.height)
         lastPoseMs = SystemClock.uptimeMillis()
         poseVisible = true
+        phoneEffects?.setPerson(box.personFrame, box.imageWidth, box.imageHeight, phone)
         presentation?.setPose(box)
         eventSink?.success(mapOf(
             "type" to "placement",
@@ -706,6 +735,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun stopCamera() {
+        applySceneEffect(EffectMode.NONE)
         running = false
         votingEnabled = false
         gestureEnabled = false
@@ -745,6 +775,8 @@ private class CustomerPresentation(context: Context, display: Display) : android
     private lateinit var feedback: android.widget.TextView
     private var placement = Placement()
     private var poseBox: TorsoBox? = null
+    private var poseAvailable = true
+    private lateinit var effects: TryonEffectsView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -756,6 +788,8 @@ private class CustomerPresentation(context: Context, display: Display) : android
             alpha = 1f
         }
         scene.addView(overlay)
+        effects = TryonEffectsView(context)
+        scene.addView(effects, FrameLayout.LayoutParams(-1, -1))
         price = android.widget.TextView(context).apply {
             setTextColor(android.graphics.Color.WHITE)
             setBackgroundColor(0xBB10131A.toInt())
@@ -794,7 +828,7 @@ private class CustomerPresentation(context: Context, display: Display) : android
     fun setGarment(bitmap: Bitmap?) { if (::overlay.isInitialized) overlay.setImageBitmap(bitmap) }
     fun setPrice(text: String) { if (::price.isInitialized) {
         price.text = text
-        price.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        price.visibility = if (text.isEmpty() || effects.mode != EffectMode.NONE) View.GONE else View.VISIBLE
     } }
     fun setFeedback(text: String) { if (::feedback.isInitialized) {
         feedback.text = text
@@ -802,8 +836,25 @@ private class CustomerPresentation(context: Context, display: Display) : android
     } }
     fun setPlacement(value: Placement) { poseBox = null; placement = value; updatePlacement() }
     fun setMirror(value: Boolean) { if (::overlay.isInitialized) overlay.scaleX = if (value) -1f else 1f }
-    fun setPose(value: TorsoBox) { poseBox = value; setPoseVisible(true); updatePlacement() }
-    fun setPoseVisible(value: Boolean) { if (::overlay.isInitialized) overlay.visibility = if (value) View.VISIBLE else View.INVISIBLE }
+    fun setPose(value: TorsoBox) {
+        poseBox = value
+        effects.setPerson(value.personFrame, value.imageWidth, value.imageHeight, camera)
+        setPoseVisible(true)
+        updatePlacement()
+    }
+    fun setPoseVisible(value: Boolean) {
+        poseAvailable = value
+        if (::overlay.isInitialized) overlay.visibility =
+            if (value && effects.mode == EffectMode.NONE) View.VISIBLE else View.INVISIBLE
+        if (!value && ::effects.isInitialized) effects.setPerson(null, 1, 1, camera)
+    }
+    fun setSceneEffect(value: EffectMode) {
+        if (!::effects.isInitialized) return
+        effects.setEffect(value)
+        setPoseVisible(poseAvailable)
+        if (::price.isInitialized) price.visibility =
+            if (price.text.isEmpty() || value != EffectMode.NONE) View.GONE else View.VISIBLE
+    }
 
     private fun updatePlacement() {
         if (!::scene.isInitialized || !::overlay.isInitialized || scene.width == 0 || scene.height == 0) return

@@ -29,6 +29,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   Timer? _detectionTimer;
   Timer? _nextTimer;
   int _session = 0;
+  int _detectionRun = 0;
 
   bool _frontCamera = true;
   bool _switchingCamera = false;
@@ -39,6 +40,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   bool _garmentReady = false;
   bool _gestureReady = false;
   bool _votePending = false;
+  bool _changingGarment = false;
   bool _finished = false;
   String? _garmentId;
   String? _voteFeedback;
@@ -138,6 +140,8 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         !_busy &&
         !_switchingCamera &&
         !_votePending &&
+        !_detecting &&
+        !_changingGarment &&
         !_finished,
   );
 
@@ -145,7 +149,12 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     final session = _session;
     if (mounted) setState(() => _garmentReady = false);
     await _bridge.setVotingEnabled(false);
-    await _bridge.setGarment(_photoPath(garment));
+    final photo = _photoPath(garment);
+    if (photo != null && mounted) {
+      await precacheImage(FileImage(File(photo)), context);
+    }
+    if (!mounted || session != _session || !_running) return;
+    await _bridge.setGarment(photo);
     await _bridge.setPrice(
       garment == null ? '' : '${faNumber(garment.effectivePrice)} تومان',
     );
@@ -154,46 +163,90 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     await _syncVoting();
   }
 
+  Future<void> _clearEffect() async {
+    await _bridge.setSceneEffect('none');
+  }
+
   void _onPlacement(LivePlacement placement) {
     if (!mounted || !_running) return;
     setState(() => _placement = placement);
-    if (!placement.visible || _personFound || _detecting) return;
+    if (!placement.visible && _detecting && !_personFound) {
+      _detectionRun++;
+      _detectionTimer?.cancel();
+      setState(() => _detecting = false);
+      unawaited(_clearEffect().catchError(_showError));
+      return;
+    }
+    if (!placement.visible || _personFound || _detecting || _switchingCamera)
+      return;
+    unawaited(_detectPerson());
+  }
+
+  Future<void> _detectPerson() async {
+    final session = _session;
+    final detection = ++_detectionRun;
     setState(() => _detecting = true);
-    _detectionTimer?.cancel();
-    _detectionTimer = Timer(const Duration(milliseconds: 850), () {
-      if (!mounted || !_running) return;
-      if (_placement?.visible != true) {
-        setState(() => _detecting = false);
-        return;
-      }
-      setState(() {
-        _detecting = false;
-        _personFound = true;
+    try {
+      final duration = await _bridge.setSceneEffect('detection');
+      if (!mounted || session != _session || detection != _detectionRun) return;
+      _detectionTimer = Timer(duration, () {
+        if (!mounted ||
+            !_running ||
+            session != _session ||
+            detection != _detectionRun)
+          return;
+        if (_placement?.visible != true) {
+          setState(() => _detecting = false);
+          unawaited(_clearEffect().catchError(_showError));
+          return;
+        }
+        // Keep the clothes hidden and voting disabled until the initial image
+        // is decoded. Detection is communicated through the edge glow only.
+        setState(() => _personFound = true);
+        unawaited(_showFirstGarment());
       });
-      unawaited(_showFirstGarment());
-    });
+    } catch (error) {
+      if (mounted && session == _session && detection == _detectionRun) {
+        setState(() => _detecting = false);
+        _showError(error);
+      }
+    }
   }
 
   Future<void> _showFirstGarment() async {
+    final session = _session;
     try {
       final catalog = await ref.read(catalogProvider.future);
-      if (!mounted || !_running || !_personFound) return;
+      if (!mounted || !_running || !_personFound || session != _session) return;
       final first = _eligible(catalog).firstOrNull;
       setState(() => _garmentId = first?.id);
       await _presentGarment(first);
-      if (mounted && first == null) {
+      if (mounted && session == _session && first == null) {
         setState(
           () => _error = 'لباس آماده‌ای نیست؛ از بخش اپراتور لباس ثبت کنید.',
         );
       }
     } catch (error) {
       _showError(error);
+    } finally {
+      if (mounted && _running && session == _session) {
+        try {
+          await _clearEffect();
+          if (mounted && session == _session) {
+            setState(() => _detecting = false);
+            await _syncVoting();
+          }
+        } catch (error) {
+          _showError(error);
+        }
+      }
     }
   }
 
   Future<void> _start() async {
     if (!Platform.isAndroid || _busy || _running) return;
     final session = ++_session;
+    _detectionRun++;
     setState(() {
       _busy = true;
       _error = null;
@@ -203,6 +256,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       _garmentId = null;
       _finished = false;
       _votePending = false;
+      _changingGarment = false;
       _gestureReady = false;
       _garmentReady = false;
       _voteFeedback = null;
@@ -258,6 +312,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   }
 
   Future<void> _stop() async {
+    _detectionRun++;
     _detectionTimer?.cancel();
     _nextTimer?.cancel();
     if (!_running && !_busy) return;
@@ -278,6 +333,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
           _gestureReady = false;
           _garmentReady = false;
           _votePending = false;
+          _changingGarment = false;
         });
       }
     }
@@ -289,52 +345,95 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         !_garmentReady ||
         _garmentId == null ||
         _busy ||
+        _detecting ||
         _switchingCamera ||
         _votePending ||
-        _finished) {
+        _finished)
       return;
-    }
     final items = _eligible(ref.read(catalogProvider).value);
     final index = items.indexWhere((g) => g.id == _garmentId);
     if (index < 0) return;
+    final session = _session;
+    final hasNext = index + 1 < items.length;
     setState(() {
       _votes[items[index].id] = liked;
       _votePending = true;
+      _changingGarment = hasNext;
       _voteFeedback = liked ? 'پسندیدید' : 'نپسندیدید';
     });
     try {
       await _bridge.setVotingEnabled(false);
       await _bridge.setFeedback(_voteFeedback!);
+      // Loading starts before the countdown; the native animation is the source
+      // of the duration, so Flutter cannot accidentally show the next item early.
+      final delay = hasNext
+          ? await _bridge.setSceneEffect('loading')
+          : const Duration(milliseconds: 900);
+      if (!mounted || !_running || session != _session) return;
+      _nextTimer?.cancel();
+      _nextTimer = Timer(delay, () => unawaited(_advanceGarment(session)));
+    } catch (error) {
+      if (mounted && session == _session) {
+        try {
+          await _clearEffect();
+        } catch (_) {}
+        if (!mounted || session != _session) return;
+        setState(() {
+          _votePending = false;
+          _changingGarment = false;
+        });
+        _showError(error);
+        try {
+          await _syncVoting();
+        } catch (error) {
+          _showError(error);
+        }
+      }
+    }
+  }
+
+  Future<void> _advanceGarment(int session) async {
+    if (!mounted || !_running || session != _session) return;
+    final current = _eligible(ref.read(catalogProvider).value);
+    final currentIndex = current.indexWhere((g) => g.id == _garmentId);
+    final next = currentIndex >= 0 && currentIndex + 1 < current.length
+        ? current[currentIndex + 1]
+        : null;
+    setState(() {
+      _garmentId = next?.id;
+      _voteFeedback = null;
+      _finished = next == null;
+    });
+    try {
+      // Both old and new clothes stay hidden while the new image is prepared.
+      await _presentGarment(next);
+      if (!mounted || !_running || session != _session) return;
+      await _bridge.setFeedback(next == null ? 'همه لباس‌ها را دیدید' : '');
     } catch (error) {
       _showError(error);
-    }
-    _nextTimer?.cancel();
-    _nextTimer = Timer(const Duration(milliseconds: 900), () async {
-      if (!mounted || !_running) return;
-      final current = _eligible(ref.read(catalogProvider).value);
-      final currentIndex = current.indexWhere((g) => g.id == _garmentId);
-      final next = currentIndex >= 0 && currentIndex + 1 < current.length
-          ? current[currentIndex + 1]
-          : null;
-      setState(() {
-        _garmentId = next?.id;
-        _votePending = false;
-        _voteFeedback = null;
-        _finished = next == null;
-      });
-      try {
-        await _presentGarment(next);
-        await _bridge.setFeedback(next == null ? 'همه لباس‌ها را دیدید' : '');
-      } catch (error) {
-        _showError(error);
+    } finally {
+      if (mounted && _running && session == _session) {
+        try {
+          await _clearEffect();
+          if (mounted && _running && session == _session) {
+            setState(() {
+              _votePending = false;
+              _changingGarment = false;
+            });
+            await _syncVoting();
+          }
+        } catch (error) {
+          _showError(error);
+        }
       }
-    });
+    }
   }
 
   Future<void> _switchCamera() async {
     if (!_running || _busy || _switchingCamera || _votePending) return;
     final session = _session;
     final requested = !_frontCamera;
+    _detectionRun++;
     _detectionTimer?.cancel();
     setState(() {
       _switchingCamera = true;
@@ -344,6 +443,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     });
     try {
       await _bridge.setVotingEnabled(false);
+      await _clearEffect();
       final actualFront = await _bridge.setCameraFacing(requested);
       if (!mounted || session != _session) return;
       setState(() => _frontCamera = actualFront);
@@ -375,6 +475,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     setState(() {
       _finished = false;
       _votePending = false;
+      _changingGarment = false;
       _voteFeedback = null;
     });
     await _showFirstGarment();
@@ -391,7 +492,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     final selected = available.where((g) => g.id == _garmentId).firstOrNull;
     final photo = _photoPath(selected);
     final placement = _placement;
-    final visible = _running && _personFound && placement?.visible == true;
+    final visible =
+        _running &&
+        _personFound &&
+        !_detecting &&
+        !_changingGarment &&
+        _garmentReady &&
+        placement?.visible == true;
 
     return Stack(
       fit: StackFit.expand,
@@ -443,16 +550,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         Center(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 350),
-            child: _detecting
-                ? TweenAnimationBuilder<double>(
-                    key: const ValueKey('detecting'),
-                    tween: Tween(begin: 0.75, end: 1.12),
-                    duration: const Duration(milliseconds: 850),
-                    builder: (_, scale, child) =>
-                        Transform.scale(scale: scale, child: child),
-                    child: _badge('بدن شناسایی شد', 23, Icons.check_circle),
-                  )
-                : _voteFeedback != null
+            child: _voteFeedback != null
                 ? _badge(_voteFeedback!, 23)
                 : _finished
                 ? _badge('همه لباس‌ها را دیدید', 20)
@@ -502,6 +600,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                           onPressed:
                               !_garmentReady ||
                                   _busy ||
+                                  _detecting ||
                                   _votePending ||
                                   _switchingCamera
                               ? null
@@ -516,6 +615,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                           onPressed:
                               !_garmentReady ||
                                   _busy ||
+                                  _detecting ||
                                   _votePending ||
                                   _switchingCamera
                               ? null

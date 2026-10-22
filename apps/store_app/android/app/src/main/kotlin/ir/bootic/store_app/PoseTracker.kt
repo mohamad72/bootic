@@ -21,6 +21,7 @@ internal data class TorsoBox(
     val height: Float,
     val imageWidth: Int,
     val imageHeight: Int,
+    val personFrame: PersonFrame? = null,
 )
 
 /** All inference is local; no image or landmark data is persisted. */
@@ -84,6 +85,9 @@ internal class PoseTracker(
         val centerY = (shoulderY + hipY) / 2f
         val boxWidth = min(0.95f, max(0.12f, shoulderSpan * 1.6f))
         val boxHeight = min(0.95f, max(0.12f, torsoHeight * 1.35f))
-        return TorsoBox(centerX, centerY, boxWidth, boxHeight, width, height)
+        val person = PersonFrame.enclose(points.map {
+            BodyPoint(it.x(), it.y(), it.visibility().orElse(0f) >= 0.55f && it.presence().orElse(0f) >= 0.55f)
+        }, headPadding = shoulderSpan * width.toFloat() / height * 0.4f)
+        return TorsoBox(centerX, centerY, boxWidth, boxHeight, width, height, person)
     }
 }

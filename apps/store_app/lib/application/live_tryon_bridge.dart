@@ -78,6 +78,16 @@ class LiveTryonBridge {
     return state?['front'] as bool? ?? front;
   }
 
+  /// Native returns the duration used by the animation, keeping the garment
+  /// timer and both displays on the same two-second loading cycle.
+  Future<Duration> setSceneEffect(String effect) async {
+    final milliseconds = await _channel.invokeMethod<int>('setSceneEffect', {
+      'effect': effect,
+    });
+    if (milliseconds == null) throw StateError('مدت افکت دریافت نشد');
+    return Duration(milliseconds: milliseconds);
+  }
+
   Future<void> setVotingEnabled(bool enabled) async =>
       _channel.invokeMethod<void>('setVotingEnabled', {'enabled': enabled});
 
