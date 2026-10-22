@@ -1,0 +1,1398 @@
+{
+  "schema_version": "bootic.garment-metadata/0.1",
+  "source": {
+    "image": "1000036449.jpg",
+    "width_px": 1152,
+    "height_px": 1536,
+    "coordinate_system": "source-image pixels, origin top-left, x-right, y-down",
+    "points_convention": "image_left/image_right; not anatomical left/right",
+    "source_view": "flat_lay_front_with_visible_back_at_neck",
+    "image_category": "photo",
+    "pixel_coordinates_are_approximate": true
+  },
+  "classification": {
+    "category": "t_shirt",
+    "sleeve_length": "short",
+    "neckline": "crew_neck",
+    "neckline_trim": "dark rib-knit",
+    "pattern": "horizontal_dark_stripes_on_light_base",
+    "garment_pose": "laid_flat",
+    "primary_surface": "front",
+    "confidence": "medium_high"
+  },
+  "segmentation": {
+    "format": "polygons_in_source_pixels",
+    "outer_contour_px": [
+      [
+        0,
+        299
+      ],
+      [
+        21,
+        291
+      ],
+      [
+        65,
+        273
+      ],
+      [
+        112,
+        250
+      ],
+      [
+        158,
+        233
+      ],
+      [
+        206,
+        213
+      ],
+      [
+        256,
+        196
+      ],
+      [
+        302,
+        181
+      ],
+      [
+        347,
+        169
+      ],
+      [
+        390,
+        161
+      ],
+      [
+        432,
+        152
+      ],
+      [
+        487,
+        143
+      ],
+      [
+        531,
+        139
+      ],
+      [
+        549,
+        140
+      ],
+      [
+        574,
+        147
+      ],
+      [
+        619,
+        156
+      ],
+      [
+        668,
+        169
+      ],
+      [
+        716,
+        185
+      ],
+      [
+        754,
+        193
+      ],
+      [
+        788,
+        207
+      ],
+      [
+        825,
+        224
+      ],
+      [
+        864,
+        247
+      ],
+      [
+        903,
+        271
+      ],
+      [
+        944,
+        297
+      ],
+      [
+        974,
+        319
+      ],
+      [
+        1006,
+        349
+      ],
+      [
+        1032,
+        379
+      ],
+      [
+        1057,
+        411
+      ],
+      [
+        1076,
+        443
+      ],
+      [
+        1092,
+        474
+      ],
+      [
+        1104,
+        509
+      ],
+      [
+        1112,
+        538
+      ],
+      [
+        1117,
+        570
+      ],
+      [
+        1112,
+        602
+      ],
+      [
+        1103,
+        638
+      ],
+      [
+        1090,
+        671
+      ],
+      [
+        1081,
+        691
+      ],
+      [
+        1072,
+        702
+      ],
+      [
+        1060,
+        709
+      ],
+      [
+        1049,
+        706
+      ],
+      [
+        1035,
+        699
+      ],
+      [
+        1021,
+        680
+      ],
+      [
+        1004,
+        655
+      ],
+      [
+        986,
+        638
+      ],
+      [
+        970,
+        630
+      ],
+      [
+        948,
+        615
+      ],
+      [
+        942,
+        651
+      ],
+      [
+        935,
+        705
+      ],
+      [
+        926,
+        787
+      ],
+      [
+        918,
+        865
+      ],
+      [
+        911,
+        947
+      ],
+      [
+        905,
+        1022
+      ],
+      [
+        900,
+        1097
+      ],
+      [
+        896,
+        1163
+      ],
+      [
+        891,
+        1206
+      ],
+      [
+        879,
+        1239
+      ],
+      [
+        865,
+        1253
+      ],
+      [
+        835,
+        1254
+      ],
+      [
+        802,
+        1246
+      ],
+      [
+        776,
+        1234
+      ],
+      [
+        744,
+        1221
+      ],
+      [
+        713,
+        1212
+      ],
+      [
+        689,
+        1224
+      ],
+      [
+        672,
+        1241
+      ],
+      [
+        653,
+        1250
+      ],
+      [
+        616,
+        1258
+      ],
+      [
+        576,
+        1261
+      ],
+      [
+        530,
+        1253
+      ],
+      [
+        487,
+        1247
+      ],
+      [
+        446,
+        1234
+      ],
+      [
+        405,
+        1219
+      ],
+      [
+        369,
+        1209
+      ],
+      [
+        331,
+        1207
+      ],
+      [
+        294,
+        1211
+      ],
+      [
+        261,
+        1218
+      ],
+      [
+        232,
+        1227
+      ],
+      [
+        201,
+        1236
+      ],
+      [
+        177,
+        1247
+      ],
+      [
+        161,
+        1256
+      ],
+      [
+        147,
+        1260
+      ],
+      [
+        146,
+        1223
+      ],
+      [
+        146,
+        1182
+      ],
+      [
+        150,
+        1128
+      ],
+      [
+        154,
+        1080
+      ],
+      [
+        160,
+        1011
+      ],
+      [
+        169,
+        951
+      ],
+      [
+        177,
+        876
+      ],
+      [
+        187,
+        796
+      ],
+      [
+        198,
+        717
+      ],
+      [
+        205,
+        662
+      ],
+      [
+        219,
+        637
+      ],
+      [
+        235,
+        620
+      ],
+      [
+        221,
+        597
+      ],
+      [
+        214,
+        576
+      ],
+      [
+        213,
+        549
+      ],
+      [
+        227,
+        535
+      ],
+      [
+        196,
+        541
+      ],
+      [
+        161,
+        556
+      ],
+      [
+        128,
+        568
+      ],
+      [
+        107,
+        572
+      ],
+      [
+        92,
+        563
+      ],
+      [
+        75,
+        541
+      ],
+      [
+        58,
+        503
+      ],
+      [
+        39,
+        463
+      ],
+      [
+        20,
+        418
+      ],
+      [
+        3,
+        382
+      ],
+      [
+        0,
+        364
+      ]
+    ],
+    "subtract_polygons_px": {
+      "neck_opening_remove_visible_back_and_label": [
+        [
+          543,
+          131
+        ],
+        [
+          570,
+          141
+        ],
+        [
+          621,
+          153
+        ],
+        [
+          668,
+          168
+        ],
+        [
+          718,
+          182
+        ],
+        [
+          762,
+          194
+        ],
+        [
+          799,
+          203
+        ],
+        [
+          788,
+          225
+        ],
+        [
+          780,
+          250
+        ],
+        [
+          773,
+          273
+        ],
+        [
+          756,
+          296
+        ],
+        [
+          739,
+          312
+        ],
+        [
+          719,
+          320
+        ],
+        [
+          694,
+          323
+        ],
+        [
+          670,
+          322
+        ],
+        [
+          643,
+          314
+        ],
+        [
+          621,
+          301
+        ],
+        [
+          603,
+          286
+        ],
+        [
+          590,
+          270
+        ],
+        [
+          581,
+          248
+        ],
+        [
+          574,
+          225
+        ],
+        [
+          570,
+          203
+        ],
+        [
+          569,
+          180
+        ],
+        [
+          559,
+          160
+        ]
+      ]
+    },
+    "rasterizer": "fill outer contour then subtract hole; antialias 2x/4x; optional edge refine within 8px strip using segmentation model",
+    "alpha_feather_px": 1.5,
+    "do_not_remove": [
+      "black sleeve cuffs",
+      "dark stripe textile",
+      "front black collar band"
+    ],
+    "must_remove": [
+      "sofa",
+      "floor",
+      "objects outside outer contour",
+      "back panel and brand label visible INSIDE neckline"
+    ]
+  },
+  "regions": {
+    "torso": {
+      "polygon_px": [
+        [
+          302,
+          181
+        ],
+        [
+          351,
+          167
+        ],
+        [
+          446,
+          149
+        ],
+        [
+          535,
+          137
+        ],
+        [
+          792,
+          202
+        ],
+        [
+          852,
+          242
+        ],
+        [
+          915,
+          280
+        ],
+        [
+          946,
+          297
+        ],
+        [
+          947,
+          350
+        ],
+        [
+          935,
+          406
+        ],
+        [
+          923,
+          468
+        ],
+        [
+          923,
+          530
+        ],
+        [
+          932,
+          570
+        ],
+        [
+          948,
+          615
+        ],
+        [
+          942,
+          651
+        ],
+        [
+          918,
+          865
+        ],
+        [
+          891,
+          1206
+        ],
+        [
+          879,
+          1239
+        ],
+        [
+          865,
+          1253
+        ],
+        [
+          835,
+          1254
+        ],
+        [
+          776,
+          1234
+        ],
+        [
+          713,
+          1212
+        ],
+        [
+          672,
+          1241
+        ],
+        [
+          616,
+          1258
+        ],
+        [
+          530,
+          1253
+        ],
+        [
+          446,
+          1234
+        ],
+        [
+          369,
+          1209
+        ],
+        [
+          294,
+          1211
+        ],
+        [
+          232,
+          1227
+        ],
+        [
+          177,
+          1247
+        ],
+        [
+          147,
+          1260
+        ],
+        [
+          154,
+          1080
+        ],
+        [
+          177,
+          876
+        ],
+        [
+          198,
+          717
+        ],
+        [
+          205,
+          662
+        ],
+        [
+          235,
+          620
+        ],
+        [
+          221,
+          597
+        ],
+        [
+          214,
+          576
+        ],
+        [
+          213,
+          549
+        ],
+        [
+          239,
+          529
+        ],
+        [
+          284,
+          505
+        ],
+        [
+          319,
+          477
+        ],
+        [
+          342,
+          436
+        ],
+        [
+          333,
+          367
+        ],
+        [
+          326,
+          300
+        ],
+        [
+          320,
+          240
+        ]
+      ],
+      "warp": "piecewise_affine_torso_mesh",
+      "visibility": "front"
+    },
+    "sleeve_image_left": {
+      "polygon_px": [
+        [
+          0,
+          299
+        ],
+        [
+          53,
+          274
+        ],
+        [
+          110,
+          249
+        ],
+        [
+          166,
+          228
+        ],
+        [
+          221,
+          208
+        ],
+        [
+          281,
+          188
+        ],
+        [
+          302,
+          181
+        ],
+        [
+          320,
+          240
+        ],
+        [
+          326,
+          300
+        ],
+        [
+          333,
+          367
+        ],
+        [
+          342,
+          436
+        ],
+        [
+          319,
+          477
+        ],
+        [
+          284,
+          505
+        ],
+        [
+          239,
+          529
+        ],
+        [
+          197,
+          542
+        ],
+        [
+          152,
+          559
+        ],
+        [
+          107,
+          572
+        ],
+        [
+          88,
+          562
+        ],
+        [
+          66,
+          524
+        ],
+        [
+          34,
+          451
+        ],
+        [
+          3,
+          382
+        ],
+        [
+          0,
+          364
+        ]
+      ],
+      "warp": "independent_shoulder_elbow_sleeve_mesh",
+      "visibility": "front"
+    },
+    "sleeve_image_right": {
+      "polygon_px": [
+        [
+          946,
+          297
+        ],
+        [
+          976,
+          322
+        ],
+        [
+          1013,
+          357
+        ],
+        [
+          1048,
+          398
+        ],
+        [
+          1075,
+          443
+        ],
+        [
+          1098,
+          499
+        ],
+        [
+          1117,
+          570
+        ],
+        [
+          1106,
+          629
+        ],
+        [
+          1081,
+          691
+        ],
+        [
+          1062,
+          709
+        ],
+        [
+          1042,
+          702
+        ],
+        [
+          1018,
+          679
+        ],
+        [
+          994,
+          643
+        ],
+        [
+          948,
+          615
+        ],
+        [
+          932,
+          570
+        ],
+        [
+          923,
+          516
+        ],
+        [
+          922,
+          463
+        ],
+        [
+          935,
+          400
+        ],
+        [
+          947,
+          350
+        ]
+      ],
+      "warp": "independent_shoulder_elbow_sleeve_mesh",
+      "visibility": "front"
+    },
+    "front_collar_band": {
+      "type": "ring_segment",
+      "description": "keep dark U-shaped ribbing below transparent neck cutout",
+      "outer_curve_px": [
+        [
+          552,
+          151
+        ],
+        [
+          550,
+          207
+        ],
+        [
+          559,
+          266
+        ],
+        [
+          583,
+          300
+        ],
+        [
+          615,
+          326
+        ],
+        [
+          655,
+          341
+        ],
+        [
+          697,
+          347
+        ],
+        [
+          739,
+          338
+        ],
+        [
+          769,
+          310
+        ],
+        [
+          790,
+          265
+        ],
+        [
+          798,
+          209
+        ]
+      ],
+      "inner_curve_px": [
+        [
+          568,
+          176
+        ],
+        [
+          570,
+          220
+        ],
+        [
+          580,
+          254
+        ],
+        [
+          599,
+          286
+        ],
+        [
+          628,
+          309
+        ],
+        [
+          664,
+          322
+        ],
+        [
+          696,
+          325
+        ],
+        [
+          730,
+          318
+        ],
+        [
+          757,
+          293
+        ],
+        [
+          777,
+          255
+        ],
+        [
+          785,
+          214
+        ]
+      ],
+      "warp": "neck_anchor_curve"
+    },
+    "back_of_neck_visible_in_source": {
+      "polygon_px": [
+        [
+          543,
+          131
+        ],
+        [
+          570,
+          141
+        ],
+        [
+          621,
+          153
+        ],
+        [
+          668,
+          168
+        ],
+        [
+          718,
+          182
+        ],
+        [
+          762,
+          194
+        ],
+        [
+          799,
+          203
+        ],
+        [
+          788,
+          225
+        ],
+        [
+          780,
+          250
+        ],
+        [
+          773,
+          273
+        ],
+        [
+          756,
+          296
+        ],
+        [
+          739,
+          312
+        ],
+        [
+          719,
+          320
+        ],
+        [
+          694,
+          323
+        ],
+        [
+          670,
+          322
+        ],
+        [
+          643,
+          314
+        ],
+        [
+          621,
+          301
+        ],
+        [
+          603,
+          286
+        ],
+        [
+          590,
+          270
+        ],
+        [
+          581,
+          248
+        ],
+        [
+          574,
+          225
+        ],
+        [
+          570,
+          203
+        ],
+        [
+          569,
+          180
+        ],
+        [
+          559,
+          160
+        ]
+      ],
+      "runtime_action": "transparent_cutout",
+      "reason": "backside stripes and tag visible in flat-lay photograph, not front-view texture"
+    }
+  },
+  "landmarks_px": {
+    "shoulder_image_left": [
+      302,
+      181
+    ],
+    "shoulder_image_right": [
+      947,
+      297
+    ],
+    "collar_outer_left": [
+      552,
+      150
+    ],
+    "collar_outer_right": [
+      789,
+      209
+    ],
+    "collar_inner_left": [
+      569,
+      185
+    ],
+    "collar_inner_right": [
+      783,
+      227
+    ],
+    "front_neckline_bottom": [
+      687,
+      324
+    ],
+    "front_collar_bottom": [
+      686,
+      345
+    ],
+    "left_armpit": [
+      218,
+      574
+    ],
+    "right_armpit": [
+      943,
+      620
+    ],
+    "left_sleeve_outer_tip": [
+      0,
+      321
+    ],
+    "left_sleeve_hem_center": [
+      113,
+      567
+    ],
+    "right_sleeve_outer_tip": [
+      1073,
+      705
+    ],
+    "right_sleeve_hem_center": [
+      1028,
+      679
+    ],
+    "left_waist": [
+      190,
+      812
+    ],
+    "right_waist": [
+      921,
+      808
+    ],
+    "left_hem": [
+      149,
+      1255
+    ],
+    "hem_center": [
+      572,
+      1259
+    ],
+    "right_hem": [
+      864,
+      1252
+    ],
+    "left_torso_chest": [
+      221,
+      622
+    ],
+    "right_torso_chest": [
+      942,
+      650
+    ],
+    "center_chest": [
+      580,
+      490
+    ],
+    "center_waist": [
+      552,
+      829
+    ]
+  },
+  "landmarks_normalized": {
+    "shoulder_image_left": [
+      0.26215,
+      0.11784
+    ],
+    "shoulder_image_right": [
+      0.82205,
+      0.19336
+    ],
+    "collar_outer_left": [
+      0.47917,
+      0.09766
+    ],
+    "collar_outer_right": [
+      0.6849,
+      0.13607
+    ],
+    "collar_inner_left": [
+      0.49392,
+      0.12044
+    ],
+    "collar_inner_right": [
+      0.67969,
+      0.14779
+    ],
+    "front_neckline_bottom": [
+      0.59635,
+      0.21094
+    ],
+    "front_collar_bottom": [
+      0.59549,
+      0.22461
+    ],
+    "left_armpit": [
+      0.18924,
+      0.3737
+    ],
+    "right_armpit": [
+      0.81858,
+      0.40365
+    ],
+    "left_sleeve_outer_tip": [
+      0.0,
+      0.20898
+    ],
+    "left_sleeve_hem_center": [
+      0.09809,
+      0.36914
+    ],
+    "right_sleeve_outer_tip": [
+      0.93142,
+      0.45898
+    ],
+    "right_sleeve_hem_center": [
+      0.89236,
+      0.44206
+    ],
+    "left_waist": [
+      0.16493,
+      0.52865
+    ],
+    "right_waist": [
+      0.79948,
+      0.52604
+    ],
+    "left_hem": [
+      0.12934,
+      0.81706
+    ],
+    "hem_center": [
+      0.49653,
+      0.81966
+    ],
+    "right_hem": [
+      0.75,
+      0.8151
+    ],
+    "left_torso_chest": [
+      0.19184,
+      0.40495
+    ],
+    "right_torso_chest": [
+      0.81771,
+      0.42318
+    ],
+    "center_chest": [
+      0.50347,
+      0.31901
+    ],
+    "center_waist": [
+      0.47917,
+      0.53971
+    ]
+  },
+  "body_mapping": {
+    "coordinate_policy": "Map ALL image source points through the same sensor_rotation -> preview_crop_fit -> optional_front_mirror pipeline. Apply mirror once at the end. Never mix pixel-space with normalized-space.",
+    "shoulder_image_left": "pose_shoulder_at_screen_left",
+    "shoulder_image_right": "pose_shoulder_at_screen_right",
+    "left_armpit": "estimated_underarm_at_screen_left_from_segmentation_and_pose",
+    "right_armpit": "estimated_underarm_at_screen_right_from_segmentation_and_pose",
+    "front_collar_bottom": "base_of_neck_plus_body_scaled_offset",
+    "hem_center": "target_shirt_hem_y_from_shirt_length_or_hip_reference",
+    "sleeve_image_left": "shoulder_to_upper_arm_screen_left",
+    "sleeve_image_right": "shoulder_to_upper_arm_screen_right",
+    "pose_indices_for_mediapipe": {
+      "shoulder_left_anatomical": 11,
+      "shoulder_right_anatomical": 12,
+      "left_elbow_anatomical": 13,
+      "right_elbow_anatomical": 14,
+      "left_hip_anatomical": 23,
+      "right_hip_anatomical": 24
+    },
+    "mapping_safety": "MediaPipe anatomical left may appear on image-right in nonmirrored camera; choose screen-side after final mirror transform."
+  },
+  "rendering": {
+    "layer_order_back_to_front": [
+      "camera_person",
+      "garment_torso",
+      "garment_sleeves",
+      "front_collar_band",
+      "person_foreground_masks"
+    ],
+    "force_transparency_regions": [
+      "neck_opening_remove_visible_back_and_label"
+    ],
+    "person_foreground_masks": [
+      "face",
+      "neck_skin",
+      "hair_above_shirt",
+      "forearms_in_front_of_torso",
+      "hands_in_front_of_torso"
+    ],
+    "sampling": "mesh_tessellation_8x12_torso_4x6_per_sleeve",
+    "prefer": "piecewise_affine_mesh_warp+body_mask_occlusion+temporal_smoothing",
+    "preserve_pattern": true,
+    "preserve_aspect_ratio_when_possible": true,
+    "separate_sleeves_from_torso": true,
+    "mirror_texture_only_if_front_camera_is_mirrored": true,
+    "screen_shoulder_width_source": "person_pose_keypoints_after_transform",
+    "avoid": [
+      "global_trapezoid_warp_only",
+      "uniform_vertical_stretch_of_stripes",
+      "covering_neck_or_chin_with_original_back_collar",
+      "inventing back-view details"
+    ]
+  },
+  "fabric_estimates": {
+    "material": "knit_or_jersey_like",
+    "stretch": "unknown_from_photo",
+    "stiffness": "unknown_from_photo",
+    "weight": "unknown_from_photo",
+    "recommended_renderer_profile": "soft_t_shirt_default",
+    "measurement_verified": false
+  },
+  "calibration": {
+    "landmarks_confidence": "manually_estimated_from_single_photo",
+    "edge_confidence": "approximate_not_pixel_perfect",
+    "physically_correct_depth_available": false,
+    "requires_runtime_segmentation": true,
+    "requires_pose_detection": true,
+    "recommended_manual_review": [
+      "collar inner boundary",
+      "sleeve cuffs",
+      "outer hem",
+      "underarm transitions"
+    ],
+    "warn": "JSON alone cannot reconstruct hidden garment surfaces or physically exact cloth drape. Real-time pose & person segmentation required."
+  }
+}

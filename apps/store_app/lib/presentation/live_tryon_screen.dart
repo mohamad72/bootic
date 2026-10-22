@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app/providers.dart';
 import '../application/live_tryon_bridge.dart';
 import '../domain/garment.dart';
+import '../domain/garment_render_metadata.dart';
 import '../domain/persian.dart';
 import '../domain/pose_diagnostics.dart';
 import 'tryon_debug_overlay.dart';
@@ -134,7 +135,9 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       .toList();
 
   String? _photoPath(Garment? garment) {
-    final relative = garment?.photos['front'];
+    if (garment == null) return null;
+    final relative = garment
+        .photos[garment.tryOnJson.trim().isNotEmpty ? 'front_source' : 'front'];
     if (relative == null) return null;
     try {
       return ref.read(assetStoreProvider).resolve(relative).path;
@@ -159,12 +162,20 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     final session = _session;
     if (mounted) setState(() => _garmentReady = false);
     await _bridge.setVotingEnabled(false);
+    final render = GarmentRenderMetadata.parse(garment?.tryOnJson ?? '');
     final photo = _photoPath(garment);
-    if (photo != null && mounted) {
+    if (garment != null && render != null && photo == null) {
+      await _bridge.setGarment(null);
+      throw StateError(
+        'عکس اصلی این لباس موجود نیست؛ عکس روبرو را در فرم لباس دوباره انتخاب کنید.',
+      );
+    }
+    if (photo != null && mounted && render == null) {
       await precacheImage(FileImage(File(photo)), context);
     }
     if (!mounted || session != _session || !_running) return;
-    await _bridge.setGarment(photo);
+    await _bridge.setGarment(photo, renderMetadata: render?.toNativeMap());
+    await _bridge.setGarmentGhost(_debugEnabled && _debugGhost);
     await _bridge.setPrice(
       garment == null ? '' : '${faNumber(garment.effectivePrice)} تومان',
     );
@@ -487,6 +498,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
           _debugEnabled = enabled;
           _poseDebug = null;
         });
+      await _bridge.setGarmentGhost(enabled && _debugGhost);
     } catch (error) {
       _showError(error);
     }
@@ -530,7 +542,9 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
             viewType: 'ir.bootic.store_app/live_scene',
             onPlatformViewCreated: (_) => unawaited(_start()),
           ),
-        if (visible && photo != null)
+        if (visible &&
+            photo != null &&
+            selected?.tryOnJson.trim().isNotEmpty != true)
           Positioned.fill(
             child: LayoutBuilder(
               builder: (context, box) => Stack(
@@ -587,7 +601,14 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
               expanded: _debugDetails,
               onToggleDetails: () =>
                   setState(() => _debugDetails = !_debugDetails),
-              onGhostChanged: (value) => setState(() => _debugGhost = value),
+              onGhostChanged: (value) {
+                setState(() => _debugGhost = value);
+                unawaited(
+                  _bridge
+                      .setGarmentGhost(_debugEnabled && value)
+                      .catchError(_showError),
+                );
+              },
             ),
           ),
         Positioned(

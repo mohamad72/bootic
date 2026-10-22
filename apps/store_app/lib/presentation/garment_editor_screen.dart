@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../app/providers.dart';
 import '../application/live_tryon_bridge.dart';
 import '../domain/garment.dart';
+import '../domain/garment_render_metadata.dart';
 import '../domain/persian.dart';
 import 'common.dart';
 import 'dynamic_field.dart';
@@ -31,6 +32,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       _sku = TextEditingController(),
       _barcode = TextEditingController();
   final _chest = TextEditingController(), _length = TextEditingController();
+  final _renderJson = TextEditingController();
   Garment? _item;
   String? _loadError;
   String _category = 'top';
@@ -69,6 +71,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       _barcode.text = item.barcode;
       _chest.text = item.measurements['chest']?.toString() ?? '';
       _length.text = item.measurements['length']?.toString() ?? '';
+      _renderJson.text = item.tryOnJson;
       _category = item.category;
       _active = item.isActive;
       _metadata.addAll(item.metadata);
@@ -93,6 +96,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       _barcode,
       _chest,
       _length,
+      _renderJson,
     ]) {
       c.dispose();
     }
@@ -186,6 +190,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
               category: _category,
               isActive: _active,
               isDraft: draft ?? _item!.isDraft,
+              tryOnJson: _renderJson.text,
               metadata: Map.of(_metadata),
               photos: Map.of(_photos),
               measurements: measures,
@@ -288,14 +293,24 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     }
   }
 
-  Future<String> _importCutout(String source) async {
+  Future<String> _importCutout(
+    String source, {
+    GarmentRenderMetadata? render,
+  }) async {
     final store = ref.read(assetStoreProvider);
     final relative = await store.importPhoto(source);
     try {
       if (Platform.isAndroid) {
-        await const LiveTryonBridge().removeGarmentBackground(
-          store.resolve(relative).path,
-        );
+        if (render != null) {
+          await const LiveTryonBridge().prepareGarmentPhoto(
+            store.resolve(relative).path,
+            render.toNativeMap(),
+          );
+        } else {
+          await const LiveTryonBridge().removeGarmentBackground(
+            store.resolve(relative).path,
+          );
+        }
       }
       return relative;
     } catch (_) {
@@ -305,13 +320,17 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
   }
 
   Future<void> _removeBackground(String angle) async {
-    final source = _photos[angle];
+    final source =
+        _photos[angle == 'front' ? 'front_source' : angle] ?? _photos[angle];
     if (_photoBusy || source == null) return;
     setState(() => _photoBusy = true);
     try {
       // Work on a fresh copy; keep the previous photo if segmentation fails.
       final relative = await _importCutout(
         ref.read(assetStoreProvider).resolve(source).path,
+        render: angle == 'front'
+            ? GarmentRenderMetadata.parse(_renderJson.text)
+            : null,
       );
       if (!mounted) return;
       _photos[angle] = relative;
@@ -333,7 +352,16 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     );
     try {
       // Persist the form before leaving the activity for gallery or CameraX.
-      if (!await _persist(quiet: true)) return;
+      // An old published photo may have lost its original canvas. Let the user
+      // replace that photo before validating the new JSON/reference pair.
+      final repairingReference =
+          angle == 'front' &&
+          _renderJson.text.trim().isNotEmpty &&
+          _photos['front_source'] == null;
+      if (repairingReference) {
+        _timer?.cancel();
+      } else if (!await _persist(quiet: true))
+        return;
       final String? sourcePath;
       if (camera) {
         temporaryCapture = await const LiveTryonBridge().captureGarment();
@@ -344,9 +372,26 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
         ))?.path;
       }
       if (sourcePath == null || !mounted) return;
-      final path = await _importCutout(sourcePath);
+      final store = ref.read(assetStoreProvider);
+      // Keep the untrimmed, orientation-normalized canvas for source-pixel JSON.
+      final original = angle == 'front'
+          ? await store.importPhoto(sourcePath)
+          : null;
+      String path;
+      try {
+        path = await _importCutout(
+          sourcePath,
+          render: angle == 'front'
+              ? GarmentRenderMetadata.parse(_renderJson.text)
+              : null,
+        );
+      } catch (_) {
+        if (original != null) await store.resolve(original).delete();
+        rethrow;
+      }
       if (!mounted) return;
       _photos[angle] = path;
+      if (original != null) _photos['front_source'] = original;
       _changed();
       await _persist(quiet: true);
     } catch (e) {
@@ -362,7 +407,10 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
           }
         }
       }
-      if (mounted) setState(() => _photoBusy = false);
+      if (mounted) {
+        setState(() => _photoBusy = false);
+        if (_dirty) _scheduleAutosave();
+      }
     }
   }
 
@@ -602,6 +650,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                                         ? null
                                         : () {
                                             _photos.remove(angle.key);
+                                            if (angle.key == 'front')
+                                              _photos.remove('front_source');
                                             _changed();
                                           },
                                     child: const Text('برداشتن عکس'),
@@ -609,6 +659,52 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                               ],
                             ),
                           ],
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  SectionCard(
+                    title: 'اطلاعات پرو زنده',
+                    children: [
+                      const Text(
+                        'JSON مشخصات همین عکس روبرو را اینجا کپی کنید. این بخش اختیاری است؛ در پرو زنده برای برش یقه، نقاط اتصال و آستین‌ها استفاده می‌شود.',
+                      ),
+                      TextFormField(
+                        key: const Key('garment-render-json'),
+                        controller: _renderJson,
+                        textDirection: TextDirection.ltr,
+                        minLines: 5,
+                        maxLines: 10,
+                        maxLength: GarmentRenderMetadata.maxCharacters,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        keyboardType: TextInputType.multiline,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'مشخصات لباس (JSON)',
+                          alignLabelWithHint: true,
+                          counterText: '',
+                          hintText:
+                              '{"schema_version":"bootic.garment-metadata/0.1", ...}',
+                          errorMaxLines: 4,
+                        ),
+                        validator: (value) {
+                          try {
+                            GarmentRenderMetadata.parse(value ?? '');
+                            return null;
+                          } on FormatException catch (e) {
+                            return e.message;
+                          }
+                        },
+                        onChanged: (_) => _changed(),
+                      ),
+                      if (_renderJson.text.trim().isNotEmpty &&
+                          _photos['front_source'] == null)
+                        const Text(
+                          'برای لباس‌های قدیمی، عکس اصلی روبرو را یک بار دوباره انتخاب کنید تا مختصات JSON روی همان عکس اعمال شود.',
                         ),
                     ],
                   ),

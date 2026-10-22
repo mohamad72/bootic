@@ -1,0 +1,242 @@
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/CameraFrameCrop.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/CameraFrameCrop.kt
+new file mode 100644
+index 0000000..e8b0bc8
+--- /dev/null
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/CameraFrameCrop.kt
+@@ -0,0 +1,26 @@
++package ir.bootic.store_app
++
++import java.nio.ByteBuffer
++
++internal data class PackedRgba(val width: Int, val height: Int, val bytes: ByteArray)
++
++/** CameraX cropRect is in the unrotated buffer. Copy that ROI before rotating
++ * or mirroring, so model, projector and PreviewView see the same sensor area. */
++internal fun packRgbaCrop(
++    buffer: ByteBuffer, width: Int, height: Int, rowStride: Int,
++    left: Int, top: Int, right: Int, bottom: Int,
++): PackedRgba {
++    require(width > 0 && height > 0 && rowStride >= width * 4)
++    require(left >= 0 && top >= 0 && right <= width && bottom <= height)
++    require(right > left && bottom > top)
++    val cropWidth = right - left
++    val cropHeight = bottom - top
++    val rowBytes = cropWidth * 4
++    val packed = ByteArray(rowBytes * cropHeight)
++    val source = buffer.duplicate()
++    for (y in 0 until cropHeight) {
++        source.position((top + y) * rowStride + left * 4)
++        source.get(packed, y * rowBytes, rowBytes)
++    }
++    return PackedRgba(cropWidth, cropHeight, packed)
++}
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+index 7d49133..49798f3 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+@@ -21,6 +21,7 @@ import androidx.camera.core.CameraSelector
+ import androidx.camera.core.ImageAnalysis
+ import androidx.camera.core.ImageProxy
+ import androidx.camera.core.Preview
++import androidx.camera.core.UseCaseGroup
+ import androidx.camera.lifecycle.ProcessCameraProvider
+ import androidx.camera.view.PreviewView
+ import androidx.core.content.ContextCompat
+@@ -70,6 +71,7 @@ class MainActivity : FlutterActivity() {
+     }
+     private var poseDebugEnabled = false
+     private var latestPose: PoseObservation? = null
++    @Volatile private var frameGeometry = ""
+     private var lastDebugMs = 0L
+     private var poseLatencyMs = 0L
+     private var poseFps = 0.0
+@@ -170,6 +172,12 @@ class MainActivity : FlutterActivity() {
+                         scaleType = PreviewView.ScaleType.FILL_CENTER
+                         scaleX = if (mirror == frontCamera) 1f else -1f
+                     }
++                    // ViewPort is only valid after layout. Rebind after a size
++                    // change as well, otherwise rotation keeps the old crop.
++                    view.addOnLayoutChangeListener { _, l, t, r, b, oldL, oldT, oldR, oldB ->
++                        if (running && previewView === view && r > l && b > t &&
++                            (r - l != oldR - oldL || b - t != oldB - oldT)) bindCamera()
++                    }
+                     previewView = view
+                     if (running) bindCamera()
+                     return object : PlatformView {
+@@ -566,8 +574,9 @@ class MainActivity : FlutterActivity() {
+         val phone = previewView
+         val frame = observation?.personFrame
+         eventSink?.success(mapOf(
+-            "type" to "poseDebug", "revision" to "pose-v2",
++            "type" to "poseDebug", "revision" to "pose-v3-crop",
+             "version" to debugVersion,
++            "frameGeometry" to frameGeometry,
+             "reason" to (if (poseFailure.isNotEmpty()) poseFailure else observation?.reason ?: "waiting"),
+             "points" to observation?.points?.map { point -> mapOf(
+                 "x" to point.x.toDouble(), "y" to point.y.toDouble(),
+@@ -707,7 +716,15 @@ class MainActivity : FlutterActivity() {
+     private fun bindCamera() {
+         val preview = previewView ?: run { failStart("NO_PREVIEW", "پیش‌نمایش دوربین آماده نیست"); return }
+         running = true
++        // The layout listener retries once real preview dimensions are known.
++        if (preview.width <= 0 || preview.height <= 0) return
+         val generation = ++cameraGeneration
++        validPoseAfterMs = SystemClock.uptimeMillis()
++        lastPoseResultTs = -1L
++        latestPose = null
++        frameGeometry = ""
++        resetGestureState()
++        hidePose()
+         val future = ProcessCameraProvider.getInstance(this)
+         future.addListener({
+             if (!running || generation != cameraGeneration || isFinishing || isDestroyed) return@addListener
+@@ -725,18 +742,31 @@ class MainActivity : FlutterActivity() {
+                     preview.scaleX = 1f
+                     presentation?.setMirror(mirror)
+                 }
++                val viewPort = preview.viewPort ?: run {
++                    failStart("NO_VIEWPORT", "کادر دوربین آماده نشد؛ دوباره تلاش کنید")
++                    return@addListener
++                }
++                val rotation = preview.display.rotation
+                 current.unbindAll()
+                 provider = current
+-                val cameraPreview = Preview.Builder().build().also {
++                val cameraPreview = Preview.Builder().setTargetRotation(rotation).build().also {
+                     it.setSurfaceProvider(preview.surfaceProvider)
+                 }
+                 val analysis = ImageAnalysis.Builder()
++                    .setTargetRotation(rotation)
+                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                     .setTargetResolution(Size(640, 480))
+                     .build()
+                 analysis.setAnalyzer(cameraExecutor) { image -> renderForPresentation(image, generation) }
+-                current.bindToLifecycle(this, selector, cameraPreview, analysis)
++                // A shared ViewPort guarantees the same field of view even
++                // when the device chooses different stream resolutions.
++                val useCases = UseCaseGroup.Builder()
++                    .setViewPort(viewPort)
++                    .addUseCase(cameraPreview)
++                    .addUseCase(analysis)
++                    .build()
++                current.bindToLifecycle(this, selector, useCases)
+                 staleHandler.removeCallbacks(staleCheck)
+                 if (autoPlacement) staleHandler.postDelayed(staleCheck, 200)
+                 pendingStart?.success(mapOf("available" to true, "front" to frontCamera))
+@@ -760,16 +790,16 @@ class MainActivity : FlutterActivity() {
+             val project = presentation != null && framePending.compareAndSet(false, true)
+             if (!infer && !inferGesture && !project) return
+             queuedFrame = project
+-            val row = ByteArray(image.width * 4)
+-            val packed = ByteArray(image.width * image.height * 4)
+-            val buffer = plane.buffer
+-            for (y in 0 until image.height) {
+-                buffer.position(y * plane.rowStride)
+-                buffer.get(row)
+-                System.arraycopy(row, 0, packed, y * row.size, row.size)
+-            }
+-            val raw = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
+-            raw.copyPixelsFromBuffer(ByteBuffer.wrap(packed))
++            val crop = image.cropRect
++            val rgba = packRgbaCrop(
++                plane.buffer, image.width, image.height, plane.rowStride,
++                crop.left, crop.top, crop.right, crop.bottom,
++            )
++            frameGeometry = "${image.width}×${image.height} → " +
++                "[${crop.left},${crop.top},${crop.right},${crop.bottom}] / " +
++                "${image.imageInfo.rotationDegrees}°"
++            val raw = Bitmap.createBitmap(rgba.width, rgba.height, Bitmap.Config.ARGB_8888)
++            raw.copyPixelsFromBuffer(ByteBuffer.wrap(rgba.bytes))
+             val transform = Matrix().apply {
+                 postRotate(image.imageInfo.rotationDegrees.toFloat())
+                 if (mirror) postScale(-1f, 1f)
+diff --git a/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/CameraFrameCropTest.kt b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/CameraFrameCropTest.kt
+new file mode 100644
+index 0000000..ec80a04
+--- /dev/null
++++ b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/CameraFrameCropTest.kt
+@@ -0,0 +1,31 @@
++package ir.bootic.store_app
++
++import java.nio.ByteBuffer
++import org.junit.Assert.*
++import org.junit.Test
++
++class CameraFrameCropTest {
++    private fun frame(): ByteBuffer = ByteBuffer.allocate(56).apply {
++        // 4 x 3 RGBA, 4 bytes padding per row, no padding after the last row.
++        for (y in 0..2) for (x in 0..3) for (channel in 0..3) {
++            put(y * 20 + x * 4 + channel, (y * 10 + x).toByte())
++        }
++        position(7)
++    }
++
++    @Test fun modelReceivesOnlyTheSharedPreviewCrop() {
++        val source = frame()
++        val result = packRgbaCrop(source, 4, 3, 20, 1, 1, 3, 3)
++        assertEquals(2, result.width)
++        assertEquals(2, result.height)
++        assertArrayEquals(listOf(11, 12, 21, 22).flatMap { value -> List(4) { value.toByte() } }.toByteArray(), result.bytes)
++        assertEquals(7, source.position())
++    }
++
++    @Test fun fullFrameDropsRowPaddingWithoutDroppingEdgePixels() {
++        val result = packRgbaCrop(frame(), 4, 3, 20, 0, 0, 4, 3)
++        assertEquals(48, result.bytes.size)
++        assertEquals(0, result.bytes[0].toInt())
++        assertEquals(23, result.bytes.last().toInt())
++    }
++}
+diff --git a/apps/store_app/lib/presentation/tryon_debug_overlay.dart b/apps/store_app/lib/presentation/tryon_debug_overlay.dart
+index 423460b..7920b14 100644
+--- a/apps/store_app/lib/presentation/tryon_debug_overlay.dart
++++ b/apps/store_app/lib/presentation/tryon_debug_overlay.dart
+@@ -50,7 +50,7 @@ class TryonDebugOverlay extends StatelessWidget {
+ 
+       final p = placement;
+       final lines = [
+-        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v2'}',
++        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v3-crop'}',
+         'تشخیص: ${_reasons[d?.text('reason')] ?? 'در انتظار اطلاعات'}',
+         'تازگی: ${d?.fresh == true ? 'تازه' : 'قدیمی / بدون خروجی'} | عمر خروجی: ${n('resultAgeMs')} ms',
+         'سرعت خروجی مدل: ${n('fps', 1)} fps | تأخیر: ${n('latencyMs')} ms',
+@@ -69,6 +69,7 @@ class TryonDebugOverlay extends StatelessWidget {
+         'علامت دست: ${d?.text('gesture') ?? '—'} | رأی‌گیری: ${d?.flag('voting') == true ? 'فعال' : 'غیرفعال'}',
+         'لباس: $garment | عکس: ${n('garmentWidth')}×${n('garmentHeight')} px',
+         'راهنما: سبز = نقاط مطمئن؛ قرمز = ضعیف؛ آبی = محدودهٔ نقاط؛ نارنجی = کادر لباس.',
++        'کادر ورودی مشترک: ${d?.text('frameGeometry') ?? '—'}',
+         'توضیح: خطوط، تخمین نقاط بدن هستند، نه لبهٔ دقیق پوست. اندازهٔ سانتی‌متری بدون کالیبراسیون نداریم.',
+         'اطمینان: مقدار V احتمال دیده‌شدن نقطه و مقدار P احتمال حضور آن است.',
+       ];
+diff --git a/docs/camera-crop-fix.md b/docs/camera-crop-fix.md
+new file mode 100644
+index 0000000..a2abfdd
+--- /dev/null
++++ b/docs/camera-crop-fix.md
+@@ -0,0 +1,25 @@
++# اصلاح تطابق دوربین و نقاط بدن
++
++مبنای این پچ کامیت `7842ef3` است؛ بعد از پچ قبلی دیباگ اعمال می‌شود.
++
++## علت اصلاح
++
++در عکس‌های تست، نقاط صورت بالاتر از سر و نقاط پا پایین‌تر از پاها دیده می‌شوند. کد قبلی پیش‌نمایش و تحلیل را بدون `UseCaseGroup/ViewPort` مشترک متصل می‌کرد و `ImageProxy.cropRect` را نادیده می‌گرفت. بنابراین فرضِ همسان بودن کادر ورودی مدل با پیش‌نمایش تضمین نمی‌شد؛ تغییر ضریب عرض لباس این اختلاف را برطرف نمی‌کرد.
++
++این پچ پیش‌نمایش و تحلیل را با کادر مشترک متصل می‌کند و تنها ناحیهٔ برش اعلام‌شدهٔ دوربین را، پیش از چرخاندن و آینه‌کردن، به مدل می‌دهد. همان تصویر برای پروژکتور نیز استفاده می‌شود. هنگام تغییر اندازهٔ پیش‌نمایش، کادر دوربین دوباره محاسبه می‌شود. ضرایب لباس و آستانه‌های مدل در این پچ تغییر نکرده‌اند تا اصلاح مختصات جداگانه قابل ارزیابی باشد.
++
++مرجع: https://developer.android.com/media/camera/camerax/configuration#crop-rect
++
++## تست روی گوشی
++
++۱. بالای دیباگ باید شناسهٔ `pose-v3-crop` دیده شود.
++۲. لباس را نیمه‌شفاف کنید. با دوربین جلو و عقب، یک بار نزدیک و یک بار دور بایستید و لحظه‌ای بی‌حرکت بمانید تا تأخیر مدل با خطای مختصات اشتباه نشود.
++۳. معیار اول، قرارگرفتن نقاط صورت، شانه، لگن و مچ پا روی همان بخش‌های بدن است. مستطیل آبی فقط محدودهٔ نقاط است؛ لبهٔ واقعی پوست نیست.
++۴. جزئیات پنل را باز کنید. ردیف «کادر ورودی مشترک» ابعاد خام، محدودهٔ برش و زاویهٔ تصویر را نشان می‌دهد. از این ردیف و بدن کامل تصویر بگیرید.
++۵. دوربین را جابه‌جا کنید و گوشی را بچرخانید؛ انطباق نقاط باید حفظ شود.
++
++## حدود بررسی
++
++آزمون برش با دادهٔ RGBA دارای فاصلهٔ اضافه بین سطرها، پیش از اصلاح شکست خورد و پس از اصلاح پاس شد. مجموع ۱۷ آزمون مستقل کاتلین برای برش، هندسه، افکت و رأی‌گیری پاس شدند. بیلد کامل اندروید و تست دوربین واقعی در این محیط انجام نشده‌اند.
++
++این پچ تطابق مختصات را اصلاح می‌کند؛ مدل سه‌بعدی لباس، ماسک پوشاندن دست‌ها یا حذف یقهٔ پشت از عکس لباس اضافه نمی‌کند. تنظیم اتصال یقه و تناسب عکس لباس باید پس از تأیید انطباق نقاط روی گوشی ارزیابی شود.

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,7 +50,9 @@ Future<GoRouter> _pumpEditor(
   Future<List<FieldDefinition>> Function()? definitions,
   bool compact = false,
 }) async {
-  tester.view.physicalSize = compact ? const Size(360, 900) : const Size(420, 1000);
+  tester.view.physicalSize = compact
+      ? const Size(360, 900)
+      : const Size(420, 1000);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -71,17 +74,17 @@ Future<GoRouter> _pumpEditor(
         if (definitions != null)
           fieldsProvider.overrideWith((ref) => definitions()),
       ],
-    child: MaterialApp.router(
-      routerConfig: router,
-      builder: compact
-          ? (context, child) => MediaQuery(
-              data: MediaQuery.of(context).copyWith(
-                textScaler: const TextScaler.linear(1.5),
-              ),
-              child: child!,
-            )
-          : null,
-    ),
+      child: MaterialApp.router(
+        routerConfig: router,
+        builder: compact
+            ? (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: const TextScaler.linear(1.5)),
+                child: child!,
+              )
+            : null,
+      ),
     ),
   );
   await tester.pump();
@@ -89,6 +92,41 @@ Future<GoRouter> _pumpEditor(
 }
 
 void main() {
+  testWidgets('valid manual render JSON is included in the saved garment', (
+    tester,
+  ) async {
+    final repo = _Repository();
+    await _pumpEditor(tester, repo);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('garment-name')), 'تیشرت');
+    final field = find.byKey(const Key('garment-render-json'));
+    await tester.ensureVisible(field);
+    final text = File(
+      'test/fixtures/striped_tshirt_metadata.json',
+    ).readAsStringSync();
+    await tester.enterText(field, text);
+    await tester.pump(const Duration(seconds: 2));
+    expect(repo.saved.last.tryOnJson, text);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'invalid manual render JSON blocks autosave with an inline error',
+    (tester) async {
+      final repo = _Repository();
+      await _pumpEditor(tester, repo);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('garment-name')), 'تیشرت');
+      final field = find.byKey(const Key('garment-render-json'));
+      await tester.ensureVisible(field);
+      await tester.enterText(field, '{');
+      await tester.pump(const Duration(seconds: 2));
+      expect(repo.saved, isEmpty);
+      expect(find.textContaining('ساختار JSON معتبر نیست'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('save is disabled until field definitions load', (tester) async {
     final fields = Completer<List<FieldDefinition>>();
     await _pumpEditor(tester, _Repository(), definitions: () => fields.future);
@@ -109,7 +147,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('save remains disabled when field definitions fail', (tester) async {
+  testWidgets('save remains disabled when field definitions fail', (
+    tester,
+  ) async {
     await _pumpEditor(
       tester,
       _Repository(),
@@ -117,7 +157,9 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      tester.widget<OutlinedButton>(find.byKey(const Key('save-draft'))).onPressed,
+      tester
+          .widget<OutlinedButton>(find.byKey(const Key('save-draft')))
+          .onPressed,
       isNull,
     );
     expect(tester.takeException(), isNull);
@@ -140,7 +182,9 @@ void main() {
     expect(repo.saved.single.name, 'کت');
   });
 
-  testWidgets('exit without saving never commits the pending edit', (tester) async {
+  testWidgets('exit without saving never commits the pending edit', (
+    tester,
+  ) async {
     final repo = _Repository();
     await _pumpEditor(tester, repo);
     await tester.pumpAndSettle();

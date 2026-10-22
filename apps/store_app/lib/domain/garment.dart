@@ -1,3 +1,5 @@
+import 'garment_render_metadata.dart';
+
 const garmentCategories = {
   'top': 'بالاتنه',
   'coat': 'کت و مانتو',
@@ -32,6 +34,7 @@ class Garment {
     Map<String, double> measurements = const {},
     Set<String> excludedFields = const {},
     this.processingStatus = 'notRequested',
+    this.tryOnJson = '',
     required this.createdAt,
     required this.updatedAt,
   }) : metadata = Map.unmodifiable(metadata),
@@ -45,6 +48,7 @@ class Garment {
   }
 
   final String id, name, category, collection, sku, barcode, processingStatus;
+  final String tryOnJson;
   final int localRevision, price, stock;
   final int? discountPrice;
   final bool isActive, isDraft, archived;
@@ -58,7 +62,17 @@ class Garment {
   bool get tryOnEligible => false;
   int get effectivePrice => discountPrice ?? price;
 
+  String? get renderMetadataError {
+    try {
+      GarmentRenderMetadata.parse(tryOnJson);
+      return null;
+    } on FormatException catch (e) {
+      return e.message;
+    }
+  }
+
   List<String> validate() => [
+    if (renderMetadataError case final String error) error,
     if (name.trim().isEmpty) 'نام لباس را وارد کنید',
     if (name.length > 120) 'نام لباس حداکثر ۱۲۰ نویسه است',
     if (!garmentCategories.containsKey(category)) 'دسته لباس نامعتبر است',
@@ -71,6 +85,10 @@ class Garment {
     if (stock > 999999) 'موجودی از سقف مجاز بیشتر است',
     if (measurements.values.any((v) => !v.isFinite || v <= 0 || v > 10000))
       'اندازه باید بین صفر و ۱۰۰۰۰ میلی‌متر باشد',
+    if (!isDraft &&
+        tryOnJson.trim().isNotEmpty &&
+        photos['front_source'] == null)
+      'برای پرو با JSON، عکس اصلی روبرو را دوباره انتخاب کنید',
     if (!isDraft && photos['front'] == null)
       'برای ثبت در کاتالوگ عکس روبرو لازم است',
   ];
@@ -94,6 +112,7 @@ class Garment {
     Map<String, double>? measurements,
     Set<String>? excludedFields,
     String? processingStatus,
+    String? tryOnJson,
     DateTime? updatedAt,
   }) => Garment(
     id: id,
@@ -114,6 +133,7 @@ class Garment {
     measurements: measurements ?? this.measurements,
     excludedFields: excludedFields ?? this.excludedFields,
     processingStatus: processingStatus ?? this.processingStatus,
+    tryOnJson: tryOnJson ?? this.tryOnJson,
     createdAt: createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -137,6 +157,7 @@ class Garment {
     'measurements': measurements,
     'excludedFields': excludedFields.toList(),
     'processingStatus': processingStatus,
+    'tryOnJson': tryOnJson,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
   };
@@ -161,6 +182,7 @@ class Garment {
     ),
     excludedFields: Set<String>.from(j['excludedFields'] as List),
     processingStatus: j['processingStatus'] as String,
+    tryOnJson: j['tryOnJson'] as String? ?? '',
     createdAt: DateTime.parse(j['createdAt'] as String),
     updatedAt: DateTime.parse(j['updatedAt'] as String),
   );

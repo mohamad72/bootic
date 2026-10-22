@@ -21,6 +21,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -58,6 +59,10 @@ class MainActivity : FlutterActivity() {
     private var votingEnabled = false
     private val voteGate = GestureVoteGate()
     private var garment: Bitmap? = null
+    private var renderAsset: GarmentRenderAsset? = null
+    private var phoneGarment: GarmentMeshView? = null
+    private var garmentGeneration = 0
+    private var garmentGhost = false
     private var placement = Placement()
     private var sceneEffect = EffectMode.NONE
     private var phoneEffects: TryonEffectsView? = null
@@ -70,6 +75,7 @@ class MainActivity : FlutterActivity() {
     }
     private var poseDebugEnabled = false
     private var latestPose: PoseObservation? = null
+    @Volatile private var frameGeometry = ""
     private var lastDebugMs = 0L
     private var poseLatencyMs = 0L
     private var poseFps = 0.0
@@ -170,14 +176,24 @@ class MainActivity : FlutterActivity() {
                         scaleType = PreviewView.ScaleType.FILL_CENTER
                         scaleX = if (mirror == frontCamera) 1f else -1f
                     }
+                    view.addOnLayoutChangeListener { _, l, t, r, b, oldL, oldT, oldR, oldB ->
+                        if (running && previewView === view && r > l && b > t &&
+                            (r-l != oldR-oldL || b-t != oldB-oldT)) bindCamera()
+                    }
+                    val scene = FrameLayout(context)
+                    scene.addView(view, FrameLayout.LayoutParams(-1, -1))
+                    val mesh = GarmentMeshView(context)
+                    scene.addView(mesh, FrameLayout.LayoutParams(-1, -1))
+                    phoneGarment = mesh
                     previewView = view
                     if (running) bindCamera()
                     return object : PlatformView {
-                        override fun getView(): View = view
+                        override fun getView(): View = scene
                         override fun dispose() {
                             if (previewView === view) {
                                 previewView = null
                                 stopCamera()
+                                phoneGarment = null
                             }
                         }
                     }
@@ -241,6 +257,9 @@ class MainActivity : FlutterActivity() {
                         presentation = CustomerPresentation(this, target).also {
                             it.show()
                             it.setGarment(garment)
+                            it.setRenderAsset(renderAsset)
+                            it.setObservation(latestPose)
+                            it.setGhost(garmentGhost)
                             it.setPrice(priceText)
                             it.setFeedback(feedbackText)
                             it.setPlacement(placement)
@@ -257,6 +276,13 @@ class MainActivity : FlutterActivity() {
             }
             "detachDisplay" -> { detachDisplay(); result.success(null) }
             "setGarment" -> setGarment(call, result)
+            "prepareGarmentPhoto" -> prepareGarmentPhoto(call, result)
+            "setGarmentGhost" -> {
+                garmentGhost = call.argument<Boolean>("enabled") == true
+                phoneGarment?.alpha = if (garmentGhost) 0.3f else 1f
+                presentation?.setGhost(garmentGhost)
+                result.success(null)
+            }
             "setPoseDebugEnabled" -> {
                 poseDebugEnabled = call.argument<Boolean>("enabled") == true
                 lastDebugMs = 0L
@@ -320,6 +346,7 @@ class MainActivity : FlutterActivity() {
         }
         phoneEffects?.setEffect(effect)
         presentation?.setSceneEffect(effect)
+        updatePhoneGarment()
     }
 
     private fun MethodCall.number(key: String): Double? = (argument<Number>(key))?.toDouble()
@@ -506,7 +533,18 @@ class MainActivity : FlutterActivity() {
         eventSink?.success(mapOf("type" to "gestureVote", "liked" to (vote == "Thumb_Up")))
     }
 
+    private fun updatePhoneGarment() {
+        phoneGarment?.apply {
+            asset = renderAsset
+            mirrorTexture = mirror
+            alpha = if (garmentGhost) 0.3f else 1f
+            if (latestPose?.box != null) pose = latestPose
+            visibility = if (running && poseVisible && renderAsset != null && !sceneEffect.blocksGarment) View.VISIBLE else View.INVISIBLE
+        }
+    }
+
     private fun hidePose() {
+        phoneGarment?.apply { pose = null; visibility = View.INVISIBLE }
         phoneEffects?.setPerson(null, 1, 1, previewView)
         if (!autoPlacement) return
         presentation?.setPoseVisible(false)
@@ -538,11 +576,14 @@ class MainActivity : FlutterActivity() {
         acceptedPoses++
         val phone = previewView ?: return
         if (phone.width <= 0 || phone.height <= 0) return
-        val phonePlacement = box.forViewport(phone.width, phone.height)
+        val fitted = renderAsset?.bounds(observation, mirror) ?: box
+        val phonePlacement = fitted.forViewport(phone.width, phone.height)
         lastPoseMs = SystemClock.uptimeMillis()
         poseVisible = true
         phoneEffects?.setPerson(box.personFrame, box.imageWidth, box.imageHeight, phone)
         presentation?.setPose(box)
+        presentation?.setObservation(observation)
+        updatePhoneGarment()
         eventSink?.success(mapOf(
             "type" to "placement",
             "centerX" to phonePlacement.centerX.toDouble(),
@@ -566,8 +607,9 @@ class MainActivity : FlutterActivity() {
         val phone = previewView
         val frame = observation?.personFrame
         eventSink?.success(mapOf(
-            "type" to "poseDebug", "revision" to "pose-v2",
+            "type" to "poseDebug", "revision" to "pose-v4-json",
             "version" to debugVersion,
+            "frameGeometry" to frameGeometry,
             "reason" to (if (poseFailure.isNotEmpty()) poseFailure else observation?.reason ?: "waiting"),
             "points" to observation?.points?.map { point -> mapOf(
                 "x" to point.x.toDouble(), "y" to point.y.toDouble(),
@@ -589,6 +631,7 @@ class MainActivity : FlutterActivity() {
             "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
             "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
             "voting" to votingEnabled,
+            "renderer" to (if (renderAsset == null) "legacy" else "metadata-mesh-v1"),
             "garmentWidth" to (garment?.width ?: 0), "garmentHeight" to (garment?.height ?: 0),
         ))
     }
@@ -603,41 +646,75 @@ class MainActivity : FlutterActivity() {
         presentation = null
     }
 
+    private fun garmentFile(path: String?): File {
+        val file = File(requireNotNull(path)).canonicalFile
+        require(file.path.startsWith(filesDir.canonicalPath + File.separator))
+        require(file.extension.lowercase() in setOf("jpg", "jpeg", "png"))
+        require(file.isFile && file.length() <= 15L * 1024 * 1024)
+        return file
+    }
+
+    private fun prepareGarmentPhoto(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")
+        val metadata = call.argument<Map<String, Any?>>("renderMetadata")
+        cameraExecutor.execute {
+            try {
+                val file = garmentFile(path)
+                require(file.path.startsWith(File(filesDir, "garments").canonicalPath + File.separator))
+                val asset = GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(requireNotNull(metadata)))
+                val temporary = File(file.path + ".metadata.tmp")
+                try {
+                    temporary.outputStream().use { check(asset.masked.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+                    check(temporary.renameTo(file))
+                } finally { temporary.delete() }
+                runOnUiThread { result.success(null) }
+            } catch (_: Exception) {
+                runOnUiThread { result.error("BAD_METADATA_PHOTO", "عکس با مختصات JSON هماهنگ نیست؛ عکس اصلی همین لباس را انتخاب کنید", null) }
+            }
+        }
+    }
+
     private fun setGarment(call: MethodCall, result: MethodChannel.Result) {
         val path = call.argument<String>("path")
-        if (path == null) {
-            garment = null
-            presentation?.setGarment(null)
-            result.success(null)
-            return
-        }
-        try {
-            val root = filesDir.canonicalFile
-            val file = File(path).canonicalFile
-            if (!file.path.startsWith(root.path + File.separator) ||
-                file.extension.lowercase() !in setOf("jpg", "jpeg", "png") ||
-                !file.isFile || file.length() > 15L * 1024 * 1024) {
-                throw IllegalArgumentException()
+        val metadata = call.argument<Map<String, Any?>>("renderMetadata")
+        val generation = ++garmentGeneration
+        garment = null
+        renderAsset = null
+        phoneGarment?.asset = null
+        presentation?.setRenderAsset(null)
+        presentation?.setGarment(null)
+        if (path == null) { result.success(null); return }
+        cameraExecutor.execute {
+            try {
+                val file = garmentFile(path)
+                val asset = metadata?.let { GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(it)) }
+                val decoded = asset?.masked ?: run {
+                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(file.path, options)
+                    require(options.outWidth in 64..6000 && options.outHeight in 64..6000)
+                    var sample = 1
+                    while (options.outWidth/sample > 1600 || options.outHeight/sample > 1600) sample *= 2
+                    options.inJustDecodeBounds = false
+                    options.inSampleSize = sample
+                    options.inPreferredConfig = Bitmap.Config.ARGB_8888
+                    requireNotNull(BitmapFactory.decodeFile(file.path, options))
+                }
+                runOnUiThread {
+                    if (generation != garmentGeneration) {
+                        result.error("STALE_GARMENT", "درخواست لباس عوض شد", null)
+                    } else {
+                        garment = decoded
+                        renderAsset = asset
+                        presentation?.setGarment(decoded)
+                        presentation?.setRenderAsset(asset)
+                        presentation?.setObservation(latestPose)
+                        updatePhoneGarment()
+                        result.success(null)
+                    }
+                }
+            } catch (_: Exception) {
+                runOnUiThread { result.error("BAD_GARMENT", "عکس یا JSON لباس معتبر نیست؛ عکس اصلی روبرو و مشخصات همان عکس را بررسی کنید", null) }
             }
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.path, options)
-            if (options.outWidth !in 64..6000 || options.outHeight !in 64..6000) {
-                throw IllegalArgumentException()
-            }
-            var sample = 1
-            while (options.outWidth / sample > 1600 || options.outHeight / sample > 1600) {
-                sample *= 2
-            }
-            options.inJustDecodeBounds = false
-            options.inSampleSize = sample
-            options.inPreferredConfig = Bitmap.Config.ARGB_8888
-            val decoded = BitmapFactory.decodeFile(file.path, options)
-                ?: throw IllegalArgumentException()
-            garment = decoded
-            presentation?.setGarment(decoded)
-            result.success(null)
-        } catch (_: Exception) {
-            result.error("BAD_GARMENT", "فایل لباس معتبر یا در دسترس نیست", null)
         }
     }
 
@@ -707,7 +784,14 @@ class MainActivity : FlutterActivity() {
     private fun bindCamera() {
         val preview = previewView ?: run { failStart("NO_PREVIEW", "پیش‌نمایش دوربین آماده نیست"); return }
         running = true
+        if (preview.width <= 0 || preview.height <= 0) return
         val generation = ++cameraGeneration
+        validPoseAfterMs = SystemClock.uptimeMillis()
+        lastPoseResultTs = -1L
+        latestPose = null
+        frameGeometry = ""
+        resetGestureState()
+        hidePose()
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             if (!running || generation != cameraGeneration || isFinishing || isDestroyed) return@addListener
@@ -725,18 +809,26 @@ class MainActivity : FlutterActivity() {
                     preview.scaleX = 1f
                     presentation?.setMirror(mirror)
                 }
+                val viewPort = preview.viewPort ?: run {
+                    failStart("NO_VIEWPORT", "کادر دوربین آماده نشد؛ دوباره تلاش کنید")
+                    return@addListener
+                }
+                val rotation = preview.display.rotation
                 current.unbindAll()
                 provider = current
-                val cameraPreview = Preview.Builder().build().also {
+                val cameraPreview = Preview.Builder().setTargetRotation(rotation).build().also {
                     it.setSurfaceProvider(preview.surfaceProvider)
                 }
                 val analysis = ImageAnalysis.Builder()
+                    .setTargetRotation(rotation)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .setTargetResolution(Size(640, 480))
                     .build()
                 analysis.setAnalyzer(cameraExecutor) { image -> renderForPresentation(image, generation) }
-                current.bindToLifecycle(this, selector, cameraPreview, analysis)
+                val useCases = UseCaseGroup.Builder().setViewPort(viewPort)
+                    .addUseCase(cameraPreview).addUseCase(analysis).build()
+                current.bindToLifecycle(this, selector, useCases)
                 staleHandler.removeCallbacks(staleCheck)
                 if (autoPlacement) staleHandler.postDelayed(staleCheck, 200)
                 pendingStart?.success(mapOf("available" to true, "front" to frontCamera))
@@ -760,16 +852,13 @@ class MainActivity : FlutterActivity() {
             val project = presentation != null && framePending.compareAndSet(false, true)
             if (!infer && !inferGesture && !project) return
             queuedFrame = project
-            val row = ByteArray(image.width * 4)
-            val packed = ByteArray(image.width * image.height * 4)
-            val buffer = plane.buffer
-            for (y in 0 until image.height) {
-                buffer.position(y * plane.rowStride)
-                buffer.get(row)
-                System.arraycopy(row, 0, packed, y * row.size, row.size)
-            }
-            val raw = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
-            raw.copyPixelsFromBuffer(ByteBuffer.wrap(packed))
+            val crop = image.cropRect
+            val rgba = packRgbaCrop(plane.buffer, image.width, image.height, plane.rowStride,
+                crop.left, crop.top, crop.right, crop.bottom)
+            frameGeometry = "${image.width}×${image.height} → " +
+                "[${crop.left},${crop.top},${crop.right},${crop.bottom}] / ${image.imageInfo.rotationDegrees}°"
+            val raw = Bitmap.createBitmap(rgba.width, rgba.height, Bitmap.Config.ARGB_8888)
+            raw.copyPixelsFromBuffer(ByteBuffer.wrap(rgba.bytes))
             val transform = Matrix().apply {
                 postRotate(image.imageInfo.rotationDegrees.toFloat())
                 if (mirror) postScale(-1f, 1f)
@@ -819,6 +908,9 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun stopCamera() {
+        garmentGeneration++
+        phoneGarment?.apply { asset = null; pose = null; visibility = View.INVISIBLE }
+        renderAsset = null
         applySceneEffect(EffectMode.NONE)
         running = false
         poseDebugEnabled = false
@@ -850,6 +942,8 @@ private class CustomerPresentation(context: Context, display: Display) : android
     private lateinit var scene: FrameLayout
     private lateinit var camera: ImageView
     private lateinit var overlay: ImageView
+    private lateinit var mesh: GarmentMeshView
+    private var renderAsset: GarmentRenderAsset? = null
     private lateinit var price: android.widget.TextView
     private lateinit var feedback: android.widget.TextView
     private var placement = Placement()
@@ -867,6 +961,8 @@ private class CustomerPresentation(context: Context, display: Display) : android
             alpha = 1f
         }
         scene.addView(overlay)
+        mesh = GarmentMeshView(context)
+        scene.addView(mesh, FrameLayout.LayoutParams(-1, -1))
         effects = TryonEffectsView(context)
         scene.addView(effects, FrameLayout.LayoutParams(-1, -1))
         price = android.widget.TextView(context).apply {
@@ -914,7 +1010,17 @@ private class CustomerPresentation(context: Context, display: Display) : android
         feedback.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
     } }
     fun setPlacement(value: Placement) { poseBox = null; placement = value; updatePlacement() }
-    fun setMirror(value: Boolean) { if (::overlay.isInitialized) overlay.scaleX = if (value) -1f else 1f }
+    fun setRenderAsset(value: GarmentRenderAsset?) {
+        renderAsset = value
+        if (::mesh.isInitialized) mesh.asset = value
+        setPoseVisible(poseAvailable)
+    }
+    fun setObservation(value: PoseObservation?) { if (::mesh.isInitialized && value?.box != null) mesh.pose = value }
+    fun setGhost(value: Boolean) { if (::mesh.isInitialized) mesh.alpha = if (value) 0.3f else 1f }
+    fun setMirror(value: Boolean) {
+        if (::overlay.isInitialized) overlay.scaleX = if (value) -1f else 1f
+        if (::mesh.isInitialized) mesh.mirrorTexture = value
+    }
     fun setPose(value: TorsoBox) {
         poseBox = value
         effects.setPerson(value.personFrame, value.imageWidth, value.imageHeight, camera)
@@ -924,7 +1030,10 @@ private class CustomerPresentation(context: Context, display: Display) : android
     fun setPoseVisible(value: Boolean) {
         poseAvailable = value
         if (::overlay.isInitialized) overlay.visibility =
-            if (value && !effects.mode.blocksGarment) View.VISIBLE else View.INVISIBLE
+            if (value && renderAsset == null && !effects.mode.blocksGarment) View.VISIBLE else View.INVISIBLE
+        if (::mesh.isInitialized) mesh.visibility =
+            if (value && renderAsset != null && !effects.mode.blocksGarment) View.VISIBLE else View.INVISIBLE
+        if (!value && ::mesh.isInitialized) mesh.pose = null
         if (!value && ::effects.isInitialized) effects.setPerson(null, 1, 1, camera)
     }
     fun setSceneEffect(value: EffectMode) {

@@ -104,6 +104,17 @@ class LiveTryonBridge {
   Future<void> setVotingEnabled(bool enabled) async =>
       _channel.invokeMethod<void>('setVotingEnabled', {'enabled': enabled});
 
+  Future<void> prepareGarmentPhoto(
+    String path,
+    Map<String, Object?> metadata,
+  ) async => _channel.invokeMethod<void>('prepareGarmentPhoto', {
+    'path': path,
+    'renderMetadata': metadata,
+  });
+
+  Future<void> setGarmentGhost(bool enabled) async =>
+      _channel.invokeMethod<void>('setGarmentGhost', {'enabled': enabled});
+
   Future<void> removeGarmentBackground(String path) async =>
       _channel.invokeMethod<void>('removeGarmentBackground', {'path': path});
 
@@ -123,8 +134,13 @@ class LiveTryonBridge {
   Future<void> detachDisplay() async =>
       _channel.invokeMethod<void>('detachDisplay');
 
-  Future<void> setGarment(String? path) async =>
-      _channel.invokeMethod<void>('setGarment', {'path': path});
+  Future<void> setGarment(
+    String? path, {
+    Map<String, Object?>? renderMetadata,
+  }) async => _channel.invokeMethod<void>('setGarment', {
+    'path': path,
+    'renderMetadata': renderMetadata,
+  });
 
   Future<void> setPrice(String text) async =>
       _channel.invokeMethod<void>('setPrice', {'text': text});

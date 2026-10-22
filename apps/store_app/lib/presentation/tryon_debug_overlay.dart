@@ -50,7 +50,7 @@ class TryonDebugOverlay extends StatelessWidget {
 
       final p = placement;
       final lines = [
-        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v2'}',
+        'نسخه: ${d?.text('version') ?? '—'} | ${d?.text('revision') ?? 'pose-v4-json'}',
         'تشخیص: ${_reasons[d?.text('reason')] ?? 'در انتظار اطلاعات'}',
         'تازگی: ${d?.fresh == true ? 'تازه' : 'قدیمی / بدون خروجی'} | عمر خروجی: ${n('resultAgeMs')} ms',
         'سرعت خروجی مدل: ${n('fps', 1)} fps | تأخیر: ${n('latencyMs')} ms',
@@ -69,6 +69,8 @@ class TryonDebugOverlay extends StatelessWidget {
         'علامت دست: ${d?.text('gesture') ?? '—'} | رأی‌گیری: ${d?.flag('voting') == true ? 'فعال' : 'غیرفعال'}',
         'لباس: $garment | عکس: ${n('garmentWidth')}×${n('garmentHeight')} px',
         'راهنما: سبز = نقاط مطمئن؛ قرمز = ضعیف؛ آبی = محدودهٔ نقاط؛ نارنجی = کادر لباس.',
+        'رندر لباس: ${d?.text('renderer') ?? '—'}',
+        'کادر ورودی مشترک: ${d?.text('frameGeometry') ?? '—'}',
         'توضیح: خطوط، تخمین نقاط بدن هستند، نه لبهٔ دقیق پوست. اندازهٔ سانتی‌متری بدون کالیبراسیون نداریم.',
         'اطمینان: مقدار V احتمال دیده‌شدن نقطه و مقدار P احتمال حضور آن است.',
       ];
