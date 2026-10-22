@@ -37,7 +37,6 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.max
 
 /** One CameraX session feeds the phone preview and the customer display. */
 class MainActivity : FlutterActivity() {
@@ -65,6 +64,21 @@ class MainActivity : FlutterActivity() {
     @Volatile private var autoPlacement = false
     private var autoGeneration = 0
     private var poseVisible = false
+    private val debugVersion by lazy {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        "${info.versionName}+${info.longVersionCode}"
+    }
+    private var poseDebugEnabled = false
+    private var latestPose: PoseObservation? = null
+    private var lastDebugMs = 0L
+    private var poseLatencyMs = 0L
+    private var poseFps = 0.0
+    private var fpsWindowMs = 0L
+    private var fpsCount = 0
+    private var acceptedPoses = 0
+    private var rejectedPoses = 0
+    private var lastGestureLabel = "none"
+    private var poseFailure = ""
     private var pendingAuto: MethodChannel.Result? = null
     @Volatile private var poseTracker: PoseTracker? = null
     private var lastPoseMs = 0L
@@ -85,6 +99,7 @@ class MainActivity : FlutterActivity() {
         override fun run() {
             if (!autoPlacement || !running) return
             if (SystemClock.uptimeMillis() - lastPoseMs > 700) hidePose()
+            emitPoseDebug()
             staleHandler.postDelayed(this, 200)
         }
     }
@@ -242,6 +257,12 @@ class MainActivity : FlutterActivity() {
             }
             "detachDisplay" -> { detachDisplay(); result.success(null) }
             "setGarment" -> setGarment(call, result)
+            "setPoseDebugEnabled" -> {
+                poseDebugEnabled = call.argument<Boolean>("enabled") == true
+                lastDebugMs = 0L
+                emitPoseDebug()
+                result.success(null)
+            }
             "setAutoPlacement" -> setAutoPlacement(call, result)
             "setGestureControl" -> setGestureControl(call, result)
             "setPrice" -> {
@@ -334,6 +355,11 @@ class MainActivity : FlutterActivity() {
                     runOnUiThread {
                         if (autoPlacement) {
                             autoPlacement = false
+                            poseFailure = "tracker_error"
+                            latestPose = null
+                            lastPoseResultTs = -1L
+                            lastDebugMs = 0L
+                            emitPoseDebug()
                             val failed = poseTracker
                             poseTracker = null
                             try { cameraExecutor.execute { failed?.close() } } catch (_: Exception) { failed?.close() }
@@ -378,6 +404,13 @@ class MainActivity : FlutterActivity() {
         poseVisible = false
         lastPoseMs = SystemClock.uptimeMillis()
         lastPoseResultTs = -1L
+        latestPose = null
+        poseFailure = ""
+        acceptedPoses = 0
+        rejectedPoses = 0
+        fpsCount = 0
+        poseFps = 0.0
+        fpsWindowMs = lastPoseMs
         validPoseAfterMs = lastPoseMs
         presentation?.setPoseVisible(false)
         eventSink?.success(mapOf("type" to "placement", "visible" to false))
@@ -466,6 +499,7 @@ class MainActivity : FlutterActivity() {
         if (!running || !gestureEnabled || timestamp < validGestureAfterMs ||
             timestamp <= lastGestureResultTs) return
         lastGestureResultTs = timestamp
+        lastGestureLabel = label ?: "none"
         val vote = voteGate.update(label, timestamp, votingEnabled) ?: return
         // Do not consume gestures while Flutter is loading a garment or showing feedback.
         votingEnabled = false
@@ -482,10 +516,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun onPoseResult(box: TorsoBox?, timestamp: Long) {
+    private fun onPoseResult(observation: PoseObservation, timestamp: Long) {
         if (!autoPlacement || !running || timestamp < validPoseAfterMs || timestamp <= lastPoseResultTs) return
         lastPoseResultTs = timestamp
-        if (box == null) return
+        latestPose = observation
+        poseFailure = ""
+        val now = SystemClock.uptimeMillis()
+        poseLatencyMs = (now - timestamp).coerceAtLeast(0)
+        fpsCount++
+        if (now - fpsWindowMs >= 1000) {
+            poseFps = fpsCount * 1000.0 / (now - fpsWindowMs)
+            fpsCount = 0
+            fpsWindowMs = now
+        }
+        val box = observation.box
+        if (box == null) {
+            rejectedPoses++
+            emitPoseDebug()
+            return
+        }
+        acceptedPoses++
         val phone = previewView ?: return
         if (phone.width <= 0 || phone.height <= 0) return
         val phonePlacement = box.forViewport(phone.width, phone.height)
@@ -499,20 +549,48 @@ class MainActivity : FlutterActivity() {
             "centerY" to phonePlacement.centerY.toDouble(),
             "width" to phonePlacement.width.toDouble(),
             "height" to phonePlacement.height.toDouble(),
+            "rotationDegrees" to phonePlacement.rotationDegrees.toDouble(),
             "visible" to true,
         ))
+        emitPoseDebug()
     }
 
-    private fun TorsoBox.forViewport(viewWidth: Int, viewHeight: Int): Placement {
-        val scale = max(viewWidth.toFloat() / imageWidth, viewHeight.toFloat() / imageHeight)
-        val widthFactor = imageWidth * scale / viewWidth
-        val heightFactor = imageHeight * scale / viewHeight
-        return Placement(
-            ((centerX - 0.5f) * widthFactor + 0.5f).coerceIn(0f, 1f),
-            ((centerY - 0.5f) * heightFactor + 0.5f).coerceIn(0f, 1f),
-            (width * widthFactor).coerceIn(0.01f, 1f),
-            (height * heightFactor).coerceIn(0.01f, 1f),
-        )
+    /** Four updates/second, only when requested. Raw rejected points stay available
+     * so a screenshot can distinguish model loss from our geometry rejection. */
+    private fun emitPoseDebug() {
+        if (!poseDebugEnabled) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastDebugMs < 250) return
+        lastDebugMs = now
+        val observation = latestPose
+        val phone = previewView
+        val frame = observation?.personFrame
+        eventSink?.success(mapOf(
+            "type" to "poseDebug", "revision" to "pose-v2",
+            "version" to debugVersion,
+            "reason" to (if (poseFailure.isNotEmpty()) poseFailure else observation?.reason ?: "waiting"),
+            "points" to observation?.points?.map { point -> mapOf(
+                "x" to point.x.toDouble(), "y" to point.y.toDouble(),
+                "visibility" to point.visibility.toDouble(), "presence" to point.presence.toDouble(),
+            ) }.orEmpty(),
+            "bounds" to frame?.let { listOf(it.left.toDouble(), it.top.toDouble(), it.right.toDouble(), it.bottom.toDouble()) },
+            "imageWidth" to (observation?.imageWidth ?: 0), "imageHeight" to (observation?.imageHeight ?: 0),
+            "viewWidth" to (phone?.width ?: 0), "viewHeight" to (phone?.height ?: 0),
+            "shoulderPx" to (observation?.shoulderPx?.toDouble() ?: 0.0),
+            "torsoPx" to (observation?.torsoPx?.toDouble() ?: 0.0),
+            "widthFactor" to PoseGeometry.WIDTH_FACTOR.toDouble(),
+            "heightFactor" to PoseGeometry.HEIGHT_FACTOR.toDouble(),
+            "modelConfidence" to PoseGeometry.MODEL_CONFIDENCE.toDouble(),
+            "fps" to (if (lastPoseResultTs < 0 || now - lastPoseResultTs > 1500) 0.0 else poseFps),
+            "latencyMs" to poseLatencyMs,
+            "resultAgeMs" to (if (lastPoseResultTs < 0) -1L else now - lastPoseResultTs),
+            "poseAgeMs" to (now - lastPoseMs),
+            "accepted" to acceptedPoses, "rejected" to rejectedPoses,
+            "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
+            "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
+            "voting" to votingEnabled,
+            "garmentWidth" to (garment?.width ?: 0), "garmentHeight" to (garment?.height ?: 0),
+        ))
     }
 
     private fun presentationDisplays(): Array<Display> =
@@ -612,6 +690,8 @@ class MainActivity : FlutterActivity() {
         }
         frontCamera = requested
         mirror = requested
+        latestPose = null
+        poseFailure = ""
         votingEnabled = false
         validPoseAfterMs = SystemClock.uptimeMillis()
         lastPoseResultTs = -1L
@@ -703,7 +783,11 @@ class MainActivity : FlutterActivity() {
             if (infer) {
                 lastDetectMs = now
                 try { poseTracker?.detect(frame, now) } catch (_: Exception) {
-                    runOnUiThread { hidePose() }
+                    runOnUiThread {
+                        poseFailure = "inference_error"
+                        hidePose()
+                        emitPoseDebug()
+                    }
                 }
             }
             if (inferGesture) {
@@ -737,6 +821,8 @@ class MainActivity : FlutterActivity() {
     private fun stopCamera() {
         applySceneEffect(EffectMode.NONE)
         running = false
+        poseDebugEnabled = false
+        latestPose = null
         votingEnabled = false
         gestureEnabled = false
         gestureGeneration++
@@ -758,13 +844,6 @@ class MainActivity : FlutterActivity() {
         private const val CAPTURE_REQUEST = 7145
     }
 }
-
-private data class Placement(
-    val centerX: Float = 0.5f,
-    val centerY: Float = 0.45f,
-    val width: Float = 0.45f,
-    val height: Float = 0.5f,
-)
 
 /** A separate customer-only window, never the operator controls. */
 private class CustomerPresentation(context: Context, display: Display) : android.app.Presentation(context, display) {
@@ -828,7 +907,7 @@ private class CustomerPresentation(context: Context, display: Display) : android
     fun setGarment(bitmap: Bitmap?) { if (::overlay.isInitialized) overlay.setImageBitmap(bitmap) }
     fun setPrice(text: String) { if (::price.isInitialized) {
         price.text = text
-        price.visibility = if (text.isEmpty() || effects.mode != EffectMode.NONE) View.GONE else View.VISIBLE
+        price.visibility = if (text.isEmpty() || effects.mode.blocksGarment) View.GONE else View.VISIBLE
     } }
     fun setFeedback(text: String) { if (::feedback.isInitialized) {
         feedback.text = text
@@ -845,7 +924,7 @@ private class CustomerPresentation(context: Context, display: Display) : android
     fun setPoseVisible(value: Boolean) {
         poseAvailable = value
         if (::overlay.isInitialized) overlay.visibility =
-            if (value && effects.mode == EffectMode.NONE) View.VISIBLE else View.INVISIBLE
+            if (value && !effects.mode.blocksGarment) View.VISIBLE else View.INVISIBLE
         if (!value && ::effects.isInitialized) effects.setPerson(null, 1, 1, camera)
     }
     fun setSceneEffect(value: EffectMode) {
@@ -853,22 +932,13 @@ private class CustomerPresentation(context: Context, display: Display) : android
         effects.setEffect(value)
         setPoseVisible(poseAvailable)
         if (::price.isInitialized) price.visibility =
-            if (price.text.isEmpty() || value != EffectMode.NONE) View.GONE else View.VISIBLE
+            if (price.text.isEmpty() || value.blocksGarment) View.GONE else View.VISIBLE
     }
 
     private fun updatePlacement() {
         if (!::scene.isInitialized || !::overlay.isInitialized || scene.width == 0 || scene.height == 0) return
-        val adjusted = poseBox?.let { box ->
-            val scale = max(scene.width.toFloat() / box.imageWidth, scene.height.toFloat() / box.imageHeight)
-            val sx = box.imageWidth * scale / scene.width
-            val sy = box.imageHeight * scale / scene.height
-            Placement(
-                ((box.centerX - 0.5f) * sx + 0.5f).coerceIn(0f, 1f),
-                ((box.centerY - 0.5f) * sy + 0.5f).coerceIn(0f, 1f),
-                (box.width * sx).coerceIn(0.01f, 1f),
-                (box.height * sy).coerceIn(0.01f, 1f),
-            )
-        } ?: placement
+        val adjusted = poseBox?.forViewport(scene.width, scene.height) ?: placement
+        overlay.rotation = adjusted.rotationDegrees
         val width = (scene.width * adjusted.width).toInt()
         val height = (scene.height * adjusted.height).toInt()
         overlay.layoutParams = FrameLayout.LayoutParams(width, height).apply {

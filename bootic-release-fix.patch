@@ -1,0 +1,31 @@
+diff --git a/.github/workflows/android-debug.yml b/.github/workflows/android-debug.yml
+index c2f4f0c..bd8e160 100644
+--- a/.github/workflows/android-debug.yml
++++ b/.github/workflows/android-debug.yml
+@@ -60,11 +60,24 @@ jobs:
+           APK_PATH: ${{ github.workspace }}/apps/store_app/build/app/outputs/flutter-apk/bootic-debug.apk
+         run: |
+           cp build/app/outputs/flutter-apk/app-debug.apk "$APK_PATH"
++          RELEASE_TITLE="دانلود آزمایشی بوتیک — ${GITHUB_SHA:0:7}"
++          NOTES_FILE="${RUNNER_TEMP}/bootic-release-notes.md"
++          printf 'Commit: `%s`\n\nBuild: %s/%s/actions/runs/%s\n' \
++            "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$NOTES_FILE"
+           if gh release view debug-latest >/dev/null 2>&1; then
+             gh release upload debug-latest "$APK_PATH" --clobber
++            git tag --force debug-latest "$GITHUB_SHA"
++            git push --force origin refs/tags/debug-latest
++            gh release edit debug-latest \
++              --target "$GITHUB_SHA" \
++              --title "$RELEASE_TITLE" \
++              --notes-file "$NOTES_FILE"
+           else
++            git tag --force debug-latest "$GITHUB_SHA"
++            git push --force origin refs/tags/debug-latest
+             gh release create debug-latest "$APK_PATH" \
+-              --title "دانلود آزمایشی بوتیک" \
+-              --notes "آخرین APK آزمایشی بوتیک. این build برای تست است و با هر اجرای موفق به‌روزرسانی می‌شود." \
++              --verify-tag \
++              --title "$RELEASE_TITLE" \
++              --notes-file "$NOTES_FILE" \
+               --prerelease
+           fi

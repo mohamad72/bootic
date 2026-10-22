@@ -34,12 +34,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
     try {
+      final repository = ref.read(repositoryProvider);
       if (newStore) {
-        await ref
-            .read(repositoryProvider)
-            .saveSetting('storeName', _name.text.trim());
+        await repository.saveSetting('storeName', _name.text.trim());
         ref.invalidate(storeNameProvider);
       }
+      await repository.saveSetting(LocalAccess.accessGrantedSetting, 'true');
       if (mounted) ref.read(accessProvider.notifier).unlock(_code.text);
     } catch (e) {
       if (mounted) {

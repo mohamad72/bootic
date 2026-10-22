@@ -24,18 +24,24 @@ final storeNameProvider = FutureProvider<String>(
   (ref) async =>
       await ref.watch(repositoryProvider).readSetting('storeName') ?? '',
 );
+final initialAccessProvider = Provider<bool>((ref) => false);
 final accessProvider = NotifierProvider<AccessController, bool>(
   AccessController.new,
 );
 
 class AccessController extends Notifier<bool> {
   @override
-  bool build() => false;
+  bool build() => ref.watch(initialAccessProvider);
   bool unlock(String code) {
     if (!LocalAccess.accepts(code)) return false;
     state = true;
     return true;
   }
 
-  void lock() => state = false;
+  Future<void> lock() async {
+    await ref
+        .read(repositoryProvider)
+        .saveSetting(LocalAccess.accessGrantedSetting, 'false');
+    state = false;
+  }
 }

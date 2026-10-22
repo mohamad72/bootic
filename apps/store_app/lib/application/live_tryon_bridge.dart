@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import '../domain/pose_diagnostics.dart';
 
 class ExternalDisplay {
   const ExternalDisplay({required this.id, required this.name});
@@ -19,10 +20,11 @@ class LivePlacement {
     required this.centerY,
     required this.width,
     required this.height,
+    this.rotationDegrees = 0,
   });
 
   final bool visible;
-  final double centerX, centerY, width, height;
+  final double centerX, centerY, width, height, rotationDegrees;
 
   factory LivePlacement.fromMap(Map<Object?, Object?> map) => LivePlacement(
     visible: map['visible'] == true,
@@ -30,6 +32,7 @@ class LivePlacement {
     centerY: (map['centerY'] as num?)?.toDouble() ?? 0.5,
     width: (map['width'] as num?)?.toDouble() ?? 0.5,
     height: (map['height'] as num?)?.toDouble() ?? 0.5,
+    rotationDegrees: (map['rotationDegrees'] as num?)?.toDouble() ?? 0,
   );
 }
 
@@ -46,6 +49,16 @@ class LiveTryonBridge {
         (value) =>
             LivePlacement.fromMap((value as Map).cast<Object?, Object?>()),
       );
+
+  Stream<PoseDebugSnapshot> get poseDiagnostics => _nativeEvents
+      .where((value) => value is Map && value['type'] == 'poseDebug')
+      .map(
+        (value) =>
+            PoseDebugSnapshot.fromMap((value as Map).cast<Object?, Object?>()),
+      );
+
+  Future<void> setPoseDebugEnabled(bool enabled) async =>
+      _channel.invokeMethod<void>('setPoseDebugEnabled', {'enabled': enabled});
 
   Stream<String> get errors => _nativeEvents
       .where((value) => value is Map && value['type'] == 'error')

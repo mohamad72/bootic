@@ -57,8 +57,10 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       if (item == null) throw ArgumentError('این لباس پیدا نشد');
       if (!mounted) return;
       _name.text = item.name;
-      _price.text = faDigits(item.price);
-      _stock.text = faDigits(item.stock);
+      if (widget.id != null) {
+        _price.text = faDigits(item.price);
+        _stock.text = faDigits(item.stock);
+      }
       _discount.text = item.discountPrice == null
           ? ''
           : faDigits(item.discountPrice!);
@@ -114,8 +116,16 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     );
   }
 
-  String? _whole(String? value) =>
-      parseWhole(value ?? '') == null ? 'عدد صحیح وارد کنید' : null;
+  String? _whole(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    return parseWhole(value) == null ? 'عدد صحیح وارد کنید' : null;
+  }
+
+  int? _wholeOrZero(String? value) {
+    if (value == null || value.trim().isEmpty) return 0;
+    return parseWhole(value);
+  }
+
   String? _measurement(String? value) {
     if (value == null || value.trim().isEmpty) return null;
     final number = double.tryParse(asciiDigits(value).replaceAll('٫', '.'));
@@ -135,8 +145,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
               return false;
             }
             if (!form.validate()) return false;
-            final price = parseWhole(_price.text),
-                stock = parseWhole(_stock.text);
+            final price = _wholeOrZero(_price.text),
+                stock = _wholeOrZero(_stock.text);
             final discount = _discount.text.trim().isEmpty
                 ? null
                 : parseWhole(_discount.text);

@@ -28,7 +28,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             actions: [
               IconButton(
                 tooltip: 'قفل برنامه',
-                onPressed: () => ref.read(accessProvider.notifier).lock(),
+                onPressed: () async {
+                  try {
+                    await ref.read(accessProvider.notifier).lock();
+                  } catch (error) {
+                    if (context.mounted) {
+                      showNotice(context, friendlyError(error));
+                    }
+                  }
+                },
                 icon: const Icon(Icons.lock_outline),
               ),
             ],

@@ -10,6 +10,8 @@ import '../app/providers.dart';
 import '../application/live_tryon_bridge.dart';
 import '../domain/garment.dart';
 import '../domain/persian.dart';
+import '../domain/pose_diagnostics.dart';
+import 'tryon_debug_overlay.dart';
 
 /// Customer mode: opening the tab opens the front camera immediately.
 class LiveTryonScreen extends ConsumerStatefulWidget {
@@ -23,6 +25,11 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     with WidgetsBindingObserver {
   final _bridge = const LiveTryonBridge();
   StreamSubscription<LivePlacement>? _placementSubscription;
+  StreamSubscription<PoseDebugSnapshot>? _debugSubscription;
+  bool _debugEnabled = false;
+  bool _debugGhost = false;
+  bool _debugDetails = false;
+  PoseDebugSnapshot? _poseDebug;
   StreamSubscription<String>? _errorSubscription;
   StreamSubscription<bool>? _gestureSubscription;
   StreamSubscription<String>? _gestureErrorSubscription;
@@ -52,6 +59,9 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _debugSubscription = _bridge.poseDiagnostics.listen((snapshot) {
+      if (mounted && _debugEnabled) setState(() => _poseDebug = snapshot);
+    }, onError: _showError);
     _placementSubscription = _bridge.placements.listen(
       _onPlacement,
       onError: (Object error) => _showError(error),
@@ -82,6 +92,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     _session++;
     _detectionTimer?.cancel();
     _nextTimer?.cancel();
+    if (_debugSubscription != null) unawaited(_debugSubscription!.cancel());
     if (_placementSubscription != null) {
       unawaited(_placementSubscription!.cancel());
     }
@@ -140,7 +151,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         !_busy &&
         !_switchingCamera &&
         !_votePending &&
-        !_detecting &&
         !_changingGarment &&
         !_finished,
   );
@@ -170,13 +180,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   void _onPlacement(LivePlacement placement) {
     if (!mounted || !_running) return;
     setState(() => _placement = placement);
-    if (!placement.visible && _detecting && !_personFound) {
-      _detectionRun++;
-      _detectionTimer?.cancel();
-      setState(() => _detecting = false);
-      unawaited(_clearEffect().catchError(_showError));
-      return;
-    }
     if (!placement.visible || _personFound || _detecting || _switchingCamera)
       return;
     unawaited(_detectPerson());
@@ -185,7 +188,12 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   Future<void> _detectPerson() async {
     final session = _session;
     final detection = ++_detectionRun;
-    setState(() => _detecting = true);
+    // Acquisition is immediate. The glow is decorative, not a requirement for
+    // 1.2 seconds of uninterrupted tracking before preparing the first garment.
+    setState(() {
+      _detecting = true;
+      _personFound = true;
+    });
     try {
       final duration = await _bridge.setSceneEffect('detection');
       if (!mounted || session != _session || detection != _detectionRun) return;
@@ -195,20 +203,16 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
             session != _session ||
             detection != _detectionRun)
           return;
-        if (_placement?.visible != true) {
-          setState(() => _detecting = false);
-          unawaited(_clearEffect().catchError(_showError));
-          return;
-        }
-        // Keep the clothes hidden and voting disabled until the initial image
-        // is decoded. Detection is communicated through the edge glow only.
-        setState(() => _personFound = true);
-        unawaited(_showFirstGarment());
+        setState(() => _detecting = false);
+        unawaited(_clearEffect().catchError(_showError));
       });
+      unawaited(_showFirstGarment());
     } catch (error) {
       if (mounted && session == _session && detection == _detectionRun) {
         setState(() => _detecting = false);
         _showError(error);
+        // An animation failure must not prevent trying on clothes.
+        unawaited(_showFirstGarment());
       }
     }
   }
@@ -231,11 +235,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     } finally {
       if (mounted && _running && session == _session) {
         try {
-          await _clearEffect();
-          if (mounted && session == _session) {
-            setState(() => _detecting = false);
-            await _syncVoting();
-          }
+          await _syncVoting();
         } catch (error) {
           _showError(error);
         }
@@ -253,6 +253,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       _personFound = false;
       _detecting = false;
       _placement = null;
+      _poseDebug = null;
       _garmentId = null;
       _finished = false;
       _votePending = false;
@@ -273,6 +274,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       if (!mounted || session != _session) return;
       await _bridge.setFeedback('');
       await _bridge.setAutoPlacement(true);
+      await _bridge.setPoseDebugEnabled(_debugEnabled);
       if (!mounted || session != _session) return;
       try {
         await _bridge.setGestureControl(true);
@@ -328,6 +330,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
           _running = false;
           _busy = false;
           _placement = null;
+          _poseDebug = null;
           _personFound = false;
           _detecting = false;
           _gestureReady = false;
@@ -345,7 +348,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         !_garmentReady ||
         _garmentId == null ||
         _busy ||
-        _detecting ||
         _switchingCamera ||
         _votePending ||
         _finished)
@@ -355,7 +357,11 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     if (index < 0) return;
     final session = _session;
     final hasNext = index + 1 < items.length;
+    // A late glow timer must never clear the next garment's loading effect.
+    _detectionRun++;
+    _detectionTimer?.cancel();
     setState(() {
+      _detecting = false;
       _votes[items[index].id] = liked;
       _votePending = true;
       _changingGarment = hasNext;
@@ -363,6 +369,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     });
     try {
       await _bridge.setVotingEnabled(false);
+      await _clearEffect();
       await _bridge.setFeedback(_voteFeedback!);
       // Loading starts before the countdown; the native animation is the source
       // of the duration, so Flutter cannot accidentally show the next item early.
@@ -439,6 +446,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       _switchingCamera = true;
       _detecting = false;
       _placement = null;
+      _poseDebug = null;
       _error = null;
     });
     try {
@@ -470,6 +478,20 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     }
   }
 
+  Future<void> _toggleDebug() async {
+    final enabled = !_debugEnabled;
+    try {
+      await _bridge.setPoseDebugEnabled(enabled);
+      if (mounted)
+        setState(() {
+          _debugEnabled = enabled;
+          _poseDebug = null;
+        });
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
   Future<void> _restart() async {
     _votes.clear();
     setState(() {
@@ -495,7 +517,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     final visible =
         _running &&
         _personFound &&
-        !_detecting &&
         !_changingGarment &&
         _garmentReady &&
         placement?.visible == true;
@@ -524,15 +545,21 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                     width: box.maxWidth * placement.width,
                     height: box.maxHeight * placement.height,
                     child: IgnorePointer(
-                      child: Transform(
-                        alignment: Alignment.center,
-                        transform: Matrix4.rotationY(
-                          _frontCamera ? math.pi : 0,
-                        ),
-                        child: Image.file(
-                          File(photo),
-                          fit: BoxFit.fill,
-                          errorBuilder: (_, _, _) => const SizedBox(),
+                      child: Opacity(
+                        opacity: _debugEnabled && _debugGhost ? 0.3 : 1,
+                        child: Transform.rotate(
+                          angle: placement.rotationDegrees * math.pi / 180,
+                          child: Transform(
+                            alignment: Alignment.center,
+                            transform: Matrix4.rotationY(
+                              _frontCamera ? math.pi : 0,
+                            ),
+                            child: Image.file(
+                              File(photo),
+                              fit: BoxFit.fill,
+                              errorBuilder: (_, _, _) => const SizedBox(),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -541,6 +568,41 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
               ),
             ),
           ),
+        if (_debugEnabled)
+          Positioned.fill(
+            child: TryonDebugOverlay(
+              snapshot: _poseDebug,
+              placement: placement,
+              garment: selected == null
+                  ? 'بدون لباس'
+                  : '${selected.name} (${selected.id})',
+              stage: _changingGarment
+                  ? 'تعویض لباس'
+                  : !_personFound
+                  ? 'انتظار بدن'
+                  : !_garmentReady
+                  ? 'آماده‌سازی عکس'
+                  : 'لباس آماده',
+              ghost: _debugGhost,
+              expanded: _debugDetails,
+              onToggleDetails: () =>
+                  setState(() => _debugDetails = !_debugDetails),
+              onGhostChanged: (value) => setState(() => _debugGhost = value),
+            ),
+          ),
+        Positioned(
+          top: 12,
+          left: 12,
+          child: IconButton.filledTonal(
+            tooltip: _debugEnabled
+                ? 'خاموش کردن دیباگ'
+                : 'روشن کردن دیباگ تشخیص بدن',
+            isSelected: _debugEnabled,
+            onPressed: _running ? _toggleDebug : null,
+            icon: const Icon(Icons.bug_report_outlined),
+            selectedIcon: const Icon(Icons.bug_report),
+          ),
+        ),
         if (visible && selected != null)
           Positioned(
             top: 16,
@@ -600,7 +662,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                           onPressed:
                               !_garmentReady ||
                                   _busy ||
-                                  _detecting ||
                                   _votePending ||
                                   _switchingCamera
                               ? null
@@ -615,7 +676,6 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                           onPressed:
                               !_garmentReady ||
                                   _busy ||
-                                  _detecting ||
                                   _votePending ||
                                   _switchingCamera
                               ? null

@@ -31,6 +31,8 @@ internal data class PersonFrame(val left: Float, val top: Float, val right: Floa
 internal enum class EffectMode(val wireName: String, val durationMs: Long) {
     NONE("none", 0), DETECTION("detection", 1200), LOADING("loading", 2000);
 
+    val blocksGarment: Boolean get() = this == LOADING
+
     fun phaseAt(elapsedMs: Long): Float = when (this) {
         NONE -> 0f
         DETECTION -> (elapsedMs.toFloat() / durationMs).coerceIn(0f, 1f)

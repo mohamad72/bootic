@@ -15,6 +15,36 @@ void main() {
       expect(LocalAccess.accepts('12345'), isFalse);
     },
   );
+  test('access is remembered after login, including existing saved stores', () {
+    expect(
+      LocalAccess.hasPreviouslyGranted(
+        rememberedSetting: 'true',
+        storeName: null,
+      ),
+      isTrue,
+    );
+    expect(
+      LocalAccess.hasPreviouslyGranted(
+        rememberedSetting: null,
+        storeName: 'بوتیک آبی',
+      ),
+      isTrue,
+    );
+    expect(
+      LocalAccess.hasPreviouslyGranted(
+        rememberedSetting: 'false',
+        storeName: 'بوتیک آبی',
+      ),
+      isFalse,
+    );
+    expect(
+      LocalAccess.hasPreviouslyGranted(
+        rememberedSetting: null,
+        storeName: null,
+      ),
+      isFalse,
+    );
+  });
   test('search unifies Arabic letters and Persian spacing', () {
     expect(searchKey('  پيراهن كتان‌ آبی '), 'پیراهن کتان آبی');
     expect(parseWhole('۴٬۸۹۰٬۰۰۰'), 4890000);

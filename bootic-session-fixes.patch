@@ -1,0 +1,291 @@
+diff --git a/apps/store_app/lib/app/providers.dart b/apps/store_app/lib/app/providers.dart
+index dc5d7ee..3df5481 100644
+--- a/apps/store_app/lib/app/providers.dart
++++ b/apps/store_app/lib/app/providers.dart
+@@ -24,18 +24,24 @@ final storeNameProvider = FutureProvider<String>(
+   (ref) async =>
+       await ref.watch(repositoryProvider).readSetting('storeName') ?? '',
+ );
++final initialAccessProvider = Provider<bool>((ref) => false);
+ final accessProvider = NotifierProvider<AccessController, bool>(
+   AccessController.new,
+ );
+ 
+ class AccessController extends Notifier<bool> {
+   @override
+-  bool build() => false;
++  bool build() => ref.watch(initialAccessProvider);
+   bool unlock(String code) {
+     if (!LocalAccess.accepts(code)) return false;
+     state = true;
+     return true;
+   }
+ 
+-  void lock() => state = false;
++  Future<void> lock() async {
++    await ref
++        .read(repositoryProvider)
++        .saveSetting(LocalAccess.accessGrantedSetting, 'false');
++    state = false;
++  }
+ }
+diff --git a/apps/store_app/lib/bootstrap.dart b/apps/store_app/lib/bootstrap.dart
+index b1fe85c..e026547 100644
+--- a/apps/store_app/lib/bootstrap.dart
++++ b/apps/store_app/lib/bootstrap.dart
+@@ -9,6 +9,7 @@ import 'app/store_app.dart';
+ import 'data/app_database.dart';
+ import 'data/garment_repository_impl.dart';
+ import 'data/local_asset_store.dart';
++import 'domain/local_access.dart';
+ 
+ Future<void> main() async {
+   WidgetsFlutterBinding.ensureInitialized();
+@@ -21,12 +22,19 @@ Future<void> main() async {
+       ),
+     );
+     final repository = GarmentRepositoryImpl(database);
+-    await repository.readSetting('storeName');
++    final storeName = await repository.readSetting('storeName');
++    final rememberedAccess = LocalAccess.hasPreviouslyGranted(
++      rememberedSetting: await repository.readSetting(
++        LocalAccess.accessGrantedSetting,
++      ),
++      storeName: storeName,
++    );
+     runApp(
+       ProviderScope(
+         overrides: [
+           repositoryProvider.overrideWithValue(repository),
+           assetStoreProvider.overrideWithValue(LocalAssetStore(directory)),
++          initialAccessProvider.overrideWithValue(rememberedAccess),
+         ],
+         child: const StoreApp(),
+       ),
+diff --git a/apps/store_app/lib/domain/local_access.dart b/apps/store_app/lib/domain/local_access.dart
+index 2391e6c..b6e6369 100644
+--- a/apps/store_app/lib/domain/local_access.dart
++++ b/apps/store_app/lib/domain/local_access.dart
+@@ -3,5 +3,14 @@ import 'persian.dart';
+ /// Local convenience gate explicitly requested for the offline edition.
+ /// This is not an OTP, license or a server authentication mechanism.
+ abstract final class LocalAccess {
++  static const accessGrantedSetting = 'accessCodeVerified';
++
+   static bool accepts(String code) => asciiDigits(code.trim()) == '22222';
++
++  static bool hasPreviouslyGranted({
++    required String? rememberedSetting,
++    required String? storeName,
++  }) =>
++      rememberedSetting == 'true' ||
++      (rememberedSetting == null && (storeName?.trim().isNotEmpty ?? false));
+ }
+diff --git a/apps/store_app/lib/presentation/dashboard_screen.dart b/apps/store_app/lib/presentation/dashboard_screen.dart
+index 51094db..e270c12 100644
+--- a/apps/store_app/lib/presentation/dashboard_screen.dart
++++ b/apps/store_app/lib/presentation/dashboard_screen.dart
+@@ -28,7 +28,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+             actions: [
+               IconButton(
+                 tooltip: 'قفل برنامه',
+-                onPressed: () => ref.read(accessProvider.notifier).lock(),
++                onPressed: () async {
++                  try {
++                    await ref.read(accessProvider.notifier).lock();
++                  } catch (error) {
++                    if (context.mounted) {
++                      showNotice(context, friendlyError(error));
++                    }
++                  }
++                },
+                 icon: const Icon(Icons.lock_outline),
+               ),
+             ],
+diff --git a/apps/store_app/lib/presentation/garment_editor_screen.dart b/apps/store_app/lib/presentation/garment_editor_screen.dart
+index 64c2697..122ccf8 100644
+--- a/apps/store_app/lib/presentation/garment_editor_screen.dart
++++ b/apps/store_app/lib/presentation/garment_editor_screen.dart
+@@ -57,8 +57,10 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+       if (item == null) throw ArgumentError('این لباس پیدا نشد');
+       if (!mounted) return;
+       _name.text = item.name;
+-      _price.text = faDigits(item.price);
+-      _stock.text = faDigits(item.stock);
++      if (widget.id != null) {
++        _price.text = faDigits(item.price);
++        _stock.text = faDigits(item.stock);
++      }
+       _discount.text = item.discountPrice == null
+           ? ''
+           : faDigits(item.discountPrice!);
+@@ -114,8 +116,16 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+     );
+   }
+ 
+-  String? _whole(String? value) =>
+-      parseWhole(value ?? '') == null ? 'عدد صحیح وارد کنید' : null;
++  String? _whole(String? value) {
++    if (value == null || value.trim().isEmpty) return null;
++    return parseWhole(value) == null ? 'عدد صحیح وارد کنید' : null;
++  }
++
++  int? _wholeOrZero(String? value) {
++    if (value == null || value.trim().isEmpty) return 0;
++    return parseWhole(value);
++  }
++
+   String? _measurement(String? value) {
+     if (value == null || value.trim().isEmpty) return null;
+     final number = double.tryParse(asciiDigits(value).replaceAll('٫', '.'));
+@@ -135,8 +145,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+               return false;
+             }
+             if (!form.validate()) return false;
+-            final price = parseWhole(_price.text),
+-                stock = parseWhole(_stock.text);
++            final price = _wholeOrZero(_price.text),
++                stock = _wholeOrZero(_stock.text);
+             final discount = _discount.text.trim().isEmpty
+                 ? null
+                 : parseWhole(_discount.text);
+diff --git a/apps/store_app/lib/presentation/login_screen.dart b/apps/store_app/lib/presentation/login_screen.dart
+index bf1b72e..268c491 100644
+--- a/apps/store_app/lib/presentation/login_screen.dart
++++ b/apps/store_app/lib/presentation/login_screen.dart
+@@ -34,12 +34,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
+       _error = null;
+     });
+     try {
++      final repository = ref.read(repositoryProvider);
+       if (newStore) {
+-        await ref
+-            .read(repositoryProvider)
+-            .saveSetting('storeName', _name.text.trim());
++        await repository.saveSetting('storeName', _name.text.trim());
+         ref.invalidate(storeNameProvider);
+       }
++      await repository.saveSetting(LocalAccess.accessGrantedSetting, 'true');
+       if (mounted) ref.read(accessProvider.notifier).unlock(_code.text);
+     } catch (e) {
+       if (mounted) {
+diff --git a/apps/store_app/test/app_test.dart b/apps/store_app/test/app_test.dart
+index edaae71..81c2974 100644
+--- a/apps/store_app/test/app_test.dart
++++ b/apps/store_app/test/app_test.dart
+@@ -8,6 +8,7 @@ import 'package:store_app/app/store_app.dart';
+ import 'package:store_app/data/app_database.dart';
+ import 'package:store_app/data/garment_repository_impl.dart';
+ import 'package:store_app/data/local_asset_store.dart';
++import 'package:store_app/domain/local_access.dart';
+ 
+ void main() {
+   testWidgets(
+@@ -43,12 +44,51 @@ void main() {
+       await tester.tap(find.byKey(const Key('login-button')));
+       await tester.pumpAndSettle();
+       expect(find.text('کد ورود درست نیست'), findsOneWidget);
++      expect(
++        await repo.readSetting(LocalAccess.accessGrantedSetting),
++        isNull,
++      );
+       await tester.enterText(find.byKey(const Key('access-code')), '۲۲۲۲۲');
+       await tester.tap(find.byKey(const Key('login-button')));
+       await tester.pumpAndSettle();
+       expect(find.text('بوتیک آبی'), findsWidgets);
++
++      expect(
++        await repo.readSetting(LocalAccess.accessGrantedSetting),
++        'true',
++      );
++      final rememberedAccess = LocalAccess.hasPreviouslyGranted(
++        rememberedSetting: await repo.readSetting(
++          LocalAccess.accessGrantedSetting,
++        ),
++        storeName: await repo.readSetting('storeName'),
++      );
++      await tester.pumpWidget(const SizedBox.shrink());
++      await tester.pumpWidget(
++        ProviderScope(
++          overrides: [
++            repositoryProvider.overrideWithValue(repo),
++            assetStoreProvider.overrideWithValue(LocalAssetStore(temp)),
++            initialAccessProvider.overrideWithValue(rememberedAccess),
++          ],
++          child: const StoreApp(),
++        ),
++      );
++      await tester.pumpAndSettle();
++      expect(find.byKey(const Key('access-code')), findsNothing);
++
+       await tester.tap(find.byKey(const Key('add-garment')).first);
+       await tester.pumpAndSettle();
++      expect(
++        tester.widget<TextFormField>(find.byKey(const Key('garment-price')))
++            .controller!
++            .text,
++        isEmpty,
++      );
++      final stockField = tester
++          .widgetList<TextFormField>(find.byType(TextFormField))
++          .firstWhere((field) => field.decoration?.labelText == 'موجودی');
++      expect(stockField.controller!.text, isEmpty);
+       await tester.enterText(
+         find.byKey(const Key('garment-name')),
+         'مانتو کتان',
+@@ -59,7 +99,14 @@ void main() {
+       final saved = await repo.list();
+       expect(saved.single.name, 'مانتو کتان');
+       expect(saved.single.price, 890000);
++      expect(saved.single.stock, 0);
+       expect(saved.single.isDraft, isTrue);
++      await tester.tap(find.byTooltip('قفل برنامه'));
++      await tester.pumpAndSettle();
++      expect(
++        await repo.readSetting(LocalAccess.accessGrantedSetting),
++        'false',
++      );
+       expect(tester.takeException(), isNull);
+     },
+   );
+diff --git a/apps/store_app/test/domain_test.dart b/apps/store_app/test/domain_test.dart
+index 7ccb693..b6deacf 100644
+--- a/apps/store_app/test/domain_test.dart
++++ b/apps/store_app/test/domain_test.dart
+@@ -15,6 +15,36 @@ void main() {
+       expect(LocalAccess.accepts('12345'), isFalse);
+     },
+   );
++  test('access is remembered after login, including existing saved stores', () {
++    expect(
++      LocalAccess.hasPreviouslyGranted(
++        rememberedSetting: 'true',
++        storeName: null,
++      ),
++      isTrue,
++    );
++    expect(
++      LocalAccess.hasPreviouslyGranted(
++        rememberedSetting: null,
++        storeName: 'بوتیک آبی',
++      ),
++      isTrue,
++    );
++    expect(
++      LocalAccess.hasPreviouslyGranted(
++        rememberedSetting: 'false',
++        storeName: 'بوتیک آبی',
++      ),
++      isFalse,
++    );
++    expect(
++      LocalAccess.hasPreviouslyGranted(
++        rememberedSetting: null,
++        storeName: null,
++      ),
++      isFalse,
++    );
++  });
+   test('search unifies Arabic letters and Persian spacing', () {
+     expect(searchKey('  پيراهن كتان‌ آبی '), 'پیراهن کتان آبی');
+     expect(parseWhole('۴٬۸۹۰٬۰۰۰'), 4890000);
