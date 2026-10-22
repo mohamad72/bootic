@@ -278,6 +278,42 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     }
   }
 
+  Future<String> _importCutout(String source) async {
+    final store = ref.read(assetStoreProvider);
+    final relative = await store.importPhoto(source);
+    try {
+      if (Platform.isAndroid) {
+        await const LiveTryonBridge().removeGarmentBackground(
+          store.resolve(relative).path,
+        );
+      }
+      return relative;
+    } catch (_) {
+      await store.resolve(relative).delete();
+      rethrow;
+    }
+  }
+
+  Future<void> _removeBackground(String angle) async {
+    final source = _photos[angle];
+    if (_photoBusy || source == null) return;
+    setState(() => _photoBusy = true);
+    try {
+      // Work on a fresh copy; keep the previous photo if segmentation fails.
+      final relative = await _importCutout(
+        ref.read(assetStoreProvider).resolve(source).path,
+      );
+      if (!mounted) return;
+      _photos[angle] = relative;
+      _changed();
+      await _persist(quiet: true);
+    } catch (error) {
+      if (mounted) showNotice(context, friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _photoBusy = false);
+    }
+  }
+
   Future<void> _pickPhoto(String angle, {bool camera = false}) async {
     if (_photoBusy) return;
     setState(() => _photoBusy = true);
@@ -298,7 +334,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
         ))?.path;
       }
       if (sourcePath == null || !mounted) return;
-      final path = await ref.read(assetStoreProvider).importPhoto(sourcePath);
+      final path = await _importCutout(sourcePath);
       if (!mounted) return;
       _photos[angle] = path;
       _changed();
@@ -492,8 +528,12 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                         'لباس را روی زمینه ساده، با نور یکنواخت و بدون حضور مشتری عکاسی کنید. چهار نمای روبرو، پشت، چپ و راست را از گالری انتخاب کنید. برای کاتالوگ عکس روبرو ضروری است.',
                       ),
                       const Text(
-                        'کیفیت‌سنجی خودکار و اندازه‌گیری از عکس هنوز فعال نیست؛ عکس‌ها را خودتان بررسی کنید.',
+                        'لباس را به‌تنهایی، بدون پوشیدن و با فاصله از پس‌زمینه عکس بگیرید. پس‌زمینه خودکار حذف می‌شود؛ اولین بار اینترنت و سرویس‌های گوگل لازم است.',
                       ),
+                      if (_photoBusy) ...[
+                        const LinearProgressIndicator(),
+                        const Text('در حال آماده‌سازی عکس و حذف پس‌زمینه…'),
+                      ],
                       for (final angle in photoAngles.entries)
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -537,12 +577,23 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                                   icon: const Icon(Icons.photo_camera_outlined),
                                   label: const Text('عکس با دوربین'),
                                 ),
+                                if (Platform.isAndroid &&
+                                    _photos[angle.key] != null)
+                                  OutlinedButton.icon(
+                                    onPressed: _photoBusy
+                                        ? null
+                                        : () => _removeBackground(angle.key),
+                                    icon: const Icon(Icons.auto_fix_high),
+                                    label: const Text('حذف پس‌زمینه'),
+                                  ),
                                 if (_photos[angle.key] != null)
                                   TextButton(
-                                    onPressed: () {
-                                      _photos.remove(angle.key);
-                                      _changed();
-                                    },
+                                    onPressed: _photoBusy
+                                        ? null
+                                        : () {
+                                            _photos.remove(angle.key);
+                                            _changed();
+                                          },
                                     child: const Text('برداشتن عکس'),
                                   ),
                               ],

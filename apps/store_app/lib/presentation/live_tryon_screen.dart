@@ -30,10 +30,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   Timer? _nextTimer;
   int _session = 0;
 
+  bool _frontCamera = true;
+  bool _switchingCamera = false;
   bool _running = false;
   bool _busy = false;
   bool _personFound = false;
   bool _detecting = false;
+  bool _garmentReady = false;
   bool _gestureReady = false;
   bool _votePending = false;
   bool _finished = false;
@@ -94,7 +97,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     if (error is PlatformException) {
       return switch (error.code) {
         'CAMERA_DENIED' || 'CAMERA_PERMISSION' => 'اجازه دوربین را فعال کنید.',
-        'CAMERA_UNAVAILABLE' => 'دوربین جلو در دسترس نیست.',
+        'CAMERA_UNAVAILABLE' => 'دوربین انتخاب‌شده در دسترس نیست.',
         'POSE_UNAVAILABLE' => 'تشخیص بدن روی این گوشی آماده نشد.',
         _ => error.message ?? 'دوربین آماده نشد.',
       };
@@ -127,11 +130,28 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     }
   }
 
+  Future<void> _syncVoting() => _bridge.setVotingEnabled(
+    mounted &&
+        _running &&
+        _personFound &&
+        _garmentReady &&
+        !_busy &&
+        !_switchingCamera &&
+        !_votePending &&
+        !_finished,
+  );
+
   Future<void> _presentGarment(Garment? garment) async {
+    final session = _session;
+    if (mounted) setState(() => _garmentReady = false);
+    await _bridge.setVotingEnabled(false);
     await _bridge.setGarment(_photoPath(garment));
     await _bridge.setPrice(
       garment == null ? '' : '${faNumber(garment.effectivePrice)} تومان',
     );
+    if (!mounted || session != _session || !_running) return;
+    setState(() => _garmentReady = garment != null);
+    await _syncVoting();
   }
 
   void _onPlacement(LivePlacement placement) {
@@ -184,15 +204,17 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       _finished = false;
       _votePending = false;
       _gestureReady = false;
+      _garmentReady = false;
       _voteFeedback = null;
       _votes.clear();
     });
     try {
-      await _bridge.start();
+      final front = await _bridge.start();
       if (!mounted || session != _session) return;
-      setState(() => _running = true);
-      await _bridge.setMirror(true);
-      if (!mounted || session != _session) return;
+      setState(() {
+        _running = true;
+        _frontCamera = front;
+      });
       await _presentGarment(null);
       if (!mounted || session != _session) return;
       await _bridge.setFeedback('');
@@ -224,7 +246,14 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         });
       }
     } finally {
-      if (mounted && session == _session) setState(() => _busy = false);
+      if (mounted && session == _session) {
+        setState(() => _busy = false);
+        try {
+          await _syncVoting();
+        } catch (error) {
+          _showError(error);
+        }
+      }
     }
   }
 
@@ -247,6 +276,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
           _personFound = false;
           _detecting = false;
           _gestureReady = false;
+          _garmentReady = false;
           _votePending = false;
         });
       }
@@ -256,9 +286,10 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   Future<void> _vote(bool liked) async {
     if (!_running ||
         !_personFound ||
-        _placement?.visible != true ||
+        !_garmentReady ||
         _garmentId == null ||
         _busy ||
+        _switchingCamera ||
         _votePending ||
         _finished) {
       return;
@@ -272,6 +303,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       _voteFeedback = liked ? 'پسندیدید' : 'نپسندیدید';
     });
     try {
+      await _bridge.setVotingEnabled(false);
       await _bridge.setFeedback(_voteFeedback!);
     } catch (error) {
       _showError(error);
@@ -297,6 +329,45 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         _showError(error);
       }
     });
+  }
+
+  Future<void> _switchCamera() async {
+    if (!_running || _busy || _switchingCamera || _votePending) return;
+    final session = _session;
+    final requested = !_frontCamera;
+    _detectionTimer?.cancel();
+    setState(() {
+      _switchingCamera = true;
+      _detecting = false;
+      _placement = null;
+      _error = null;
+    });
+    try {
+      await _bridge.setVotingEnabled(false);
+      final actualFront = await _bridge.setCameraFacing(requested);
+      if (!mounted || session != _session) return;
+      setState(() => _frontCamera = actualFront);
+    } catch (error) {
+      if (!mounted || session != _session) return;
+      if (error is! PlatformException || error.code != 'CAMERA_UNAVAILABLE') {
+        await _stop();
+      }
+      _showError(error);
+    } finally {
+      if (mounted) {
+        setState(() => _switchingCamera = false);
+        if (_running &&
+            session == _session &&
+            _garmentId != null &&
+            !_finished) {
+          try {
+            await _syncVoting();
+          } catch (error) {
+            _showError(error);
+          }
+        }
+      }
+    }
   }
 
   Future<void> _restart() async {
@@ -348,14 +419,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                     child: IgnorePointer(
                       child: Transform(
                         alignment: Alignment.center,
-                        transform: Matrix4.rotationY(math.pi),
-                        child: Opacity(
-                          opacity: 0.78,
-                          child: Image.file(
-                            File(photo),
-                            fit: BoxFit.fill,
-                            errorBuilder: (_, _, _) => const SizedBox(),
-                          ),
+                        transform: Matrix4.rotationY(
+                          _frontCamera ? math.pi : 0,
+                        ),
+                        child: Image.file(
+                          File(photo),
+                          fit: BoxFit.fill,
+                          errorBuilder: (_, _, _) => const SizedBox(),
                         ),
                       ),
                     ),
@@ -418,7 +488,10 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                   Platform.isAndroid
                       ? const CircularProgressIndicator(color: Colors.white)
                       : _badge('دوربین زنده روی نسخه اندروید در دسترس است', 16),
-                if (visible && !_finished && selected != null) ...[
+                if (_running &&
+                    _personFound &&
+                    !_finished &&
+                    selected != null) ...[
                   const SizedBox(height: 8),
                   _badge(selected.name, 16),
                   const SizedBox(height: 8),
@@ -426,7 +499,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                     children: [
                       Expanded(
                         child: FilledButton.icon(
-                          onPressed: _votePending ? null : () => _vote(true),
+                          onPressed:
+                              !_garmentReady ||
+                                  _busy ||
+                                  _votePending ||
+                                  _switchingCamera
+                              ? null
+                              : () => _vote(true),
                           icon: const Icon(Icons.thumb_up_alt_outlined),
                           label: const Text('لایک'),
                         ),
@@ -434,7 +513,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                       const SizedBox(width: 8),
                       Expanded(
                         child: FilledButton.tonalIcon(
-                          onPressed: _votePending ? null : () => _vote(false),
+                          onPressed:
+                              !_garmentReady ||
+                                  _busy ||
+                                  _votePending ||
+                                  _switchingCamera
+                              ? null
+                              : () => _vote(false),
                           icon: const Icon(Icons.thumb_down_alt_outlined),
                           label: const Text('دیسلایک'),
                         ),
@@ -445,10 +530,28 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                     const Padding(
                       padding: EdgeInsets.only(top: 8),
                       child: Text(
-                        'شست بالا یا پایین را هم می‌توانید نشان دهید',
+                        'شست بالا یا پایین؛ بعد از ثبت، دست را پایین بیاورید',
                         style: TextStyle(color: Colors.white),
                       ),
                     ),
+                ],
+                if (_running) ...[
+                  const SizedBox(height: 8),
+                  IconButton.filledTonal(
+                    tooltip: _frontCamera
+                        ? 'استفاده از دوربین عقب'
+                        : 'استفاده از دوربین جلو',
+                    onPressed: _busy || _switchingCamera || _votePending
+                        ? null
+                        : _switchCamera,
+                    icon: _switchingCamera
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cameraswitch_outlined),
+                  ),
                 ],
                 if (_running && _finished)
                   FilledButton(

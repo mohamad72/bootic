@@ -1,0 +1,1105 @@
+diff --git a/apps/store_app/android/app/build.gradle.kts b/apps/store_app/android/app/build.gradle.kts
+index f80f441..5c6bd9b 100644
+--- a/apps/store_app/android/app/build.gradle.kts
++++ b/apps/store_app/android/app/build.gradle.kts
+@@ -36,6 +36,8 @@ flutter {
+ }
+ 
+ dependencies {
++    implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
++    testImplementation("junit:junit:4.13.2")
+     val cameraxVersion = "1.4.2"
+     implementation("androidx.camera:camera-core:$cameraxVersion")
+     implementation("androidx.camera:camera-camera2:$cameraxVersion")
+diff --git a/apps/store_app/android/app/src/main/AndroidManifest.xml b/apps/store_app/android/app/src/main/AndroidManifest.xml
+index 0bf9016..5463096 100644
+--- a/apps/store_app/android/app/src/main/AndroidManifest.xml
++++ b/apps/store_app/android/app/src/main/AndroidManifest.xml
+@@ -6,6 +6,8 @@
+         android:label="بوتیک" android:allowBackup="false"
+         android:name="${applicationName}"
+         android:icon="@mipmap/ic_launcher">
++        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES"
++            android:value="subject_segment" />
+         <activity
+             android:name=".MainActivity"
+             android:exported="true"
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentCutout.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentCutout.kt
+new file mode 100644
+index 0000000..708245c
+--- /dev/null
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GarmentCutout.kt
+@@ -0,0 +1,111 @@
++package ir.bootic.store_app
++
++import android.content.Context
++import android.graphics.Bitmap
++import android.graphics.BitmapFactory
++import android.graphics.Color
++import com.google.mlkit.vision.common.InputImage
++import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
++import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
++import io.flutter.plugin.common.MethodChannel
++import java.io.File
++import java.util.concurrent.Executor
++
++/** Operates only on normalized app-private PNG copies, never a gallery original. */
++internal class GarmentCutout(private val context: Context, private val executor: Executor) {
++    fun process(path: String?, result: MethodChannel.Result) {
++        executor.execute {
++            var bitmap: Bitmap? = null
++            try {
++                val file = File(requireNotNull(path)).canonicalFile
++                require(file.path.startsWith(File(context.filesDir, "garments").canonicalPath + File.separator))
++                require(file.extension.equals("png", true) && file.isFile && file.length() <= 15L * 1024 * 1024)
++                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
++                BitmapFactory.decodeFile(file.path, bounds)
++                require(bounds.outWidth in 64..6000 && bounds.outHeight in 64..6000)
++                var sample = 1
++                while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
++                val source = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply {
++                    inSampleSize = sample
++                    inPreferredConfig = Bitmap.Config.ARGB_8888
++                }) ?: error("Invalid image")
++                bitmap = source
++                // Do not re-segment an already transparent asset.
++                if (hasTransparency(source)) {
++                    saveCropped(source, file)
++                    source.recycle()
++                    result.success(null)
++                    return@execute
++                }
++                val segmenter = SubjectSegmentation.getClient(
++                    SubjectSegmenterOptions.Builder().enableForegroundBitmap().build(),
++                )
++                segmenter.process(InputImage.fromBitmap(source, 0))
++                    .addOnSuccessListener(executor) { segmentation ->
++                        val foreground = segmentation.foregroundBitmap
++                        try {
++                            requireNotNull(foreground)
++                            require(hasTransparency(foreground))
++                            saveCropped(foreground, file)
++                            result.success(null)
++                        } catch (_: Exception) {
++                            result.error("CUTOUT_EMPTY", "لباس از پس‌زمینه جدا نشد؛ لباس را به‌تنهایی با فاصله از پس‌زمینه عکس بگیرید", null)
++                        } finally {
++                            if (foreground !== source) foreground?.recycle()
++                            source.recycle()
++                            segmenter.close()
++                        }
++                    }
++                    .addOnFailureListener(executor) {
++                        source.recycle()
++                        segmenter.close()
++                        result.error("CUTOUT_UNAVAILABLE", "مدل حذف پس‌زمینه آماده نیست؛ اینترنت و سرویس‌های گوگل را بررسی و کمی بعد دوباره تلاش کنید", null)
++                    }
++            } catch (_: Exception) {
++                bitmap?.takeUnless { it.isRecycled }?.recycle()
++                result.error("CUTOUT_FAILED", "پردازش عکس لباس ممکن نشد؛ عکس دیگری انتخاب کنید", null)
++            }
++        }
++    }
++
++    private fun hasTransparency(bitmap: Bitmap): Boolean {
++        if (!bitmap.hasAlpha()) return false
++        val row = IntArray(bitmap.width)
++        var transparent = 0
++        for (y in 0 until bitmap.height) {
++            bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
++            transparent += row.count { Color.alpha(it) < 16 }
++        }
++        return transparent > bitmap.width * bitmap.height / 100
++    }
++
++    private fun saveCropped(bitmap: Bitmap, file: File) {
++        var left = bitmap.width
++        var top = bitmap.height
++        var right = -1
++        var bottom = -1
++        val row = IntArray(bitmap.width)
++        for (y in 0 until bitmap.height) {
++            bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
++            for (x in row.indices) if (Color.alpha(row[x]) > 16) {
++                left = minOf(left, x); right = maxOf(right, x)
++                top = minOf(top, y); bottom = maxOf(bottom, y)
++            }
++        }
++        require(right >= left && bottom >= top)
++        // Keep the renderer's minimum image dimensions while removing empty margins.
++        left = maxOf(0, minOf(left, right - 63))
++        top = maxOf(0, minOf(top, bottom - 63))
++        right = minOf(bitmap.width - 1, maxOf(right, left + 63))
++        bottom = minOf(bitmap.height - 1, maxOf(bottom, top + 63))
++        val cropped = Bitmap.createBitmap(bitmap, left, top, right - left + 1, bottom - top + 1)
++        val temporary = File(file.path + ".cutout.tmp")
++        try {
++            temporary.outputStream().use { check(cropped.compress(Bitmap.CompressFormat.PNG, 100, it)) }
++            check(temporary.renameTo(file))
++        } finally {
++            temporary.delete()
++            if (cropped !== bitmap) cropped.recycle()
++        }
++    }
++}
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GestureTracker.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GestureTracker.kt
+index 96fb00f..998d17d 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GestureTracker.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GestureTracker.kt
+@@ -27,14 +27,16 @@ internal class GestureTracker(
+                     .build(),
+             )
+             .setRunningMode(RunningMode.LIVE_STREAM)
+-            .setNumHands(1)
+-            .setMinHandDetectionConfidence(0.6f)
+-            .setMinHandPresenceConfidence(0.6f)
+-            .setMinTrackingConfidence(0.6f)
++            .setNumHands(2)
++            .setMinHandDetectionConfidence(0.5f)
++            .setMinHandPresenceConfidence(0.5f)
++            .setMinTrackingConfidence(0.5f)
+             .setResultListener { result: GestureRecognizerResult, _: MPImage ->
+-                val category = result.gestures().firstOrNull()?.firstOrNull()
++                val category = result.gestures().mapNotNull { it.firstOrNull() }
++                    .filter { it.categoryName() == "Thumb_Up" || it.categoryName() == "Thumb_Down" }
++                    .maxByOrNull { it.score() }
+                 val name = category?.categoryName()
+-                val accepted = if (category != null && category.score() >= 0.75f &&
++                val accepted = if (category != null && category.score() >= 0.60f &&
+                     (name == "Thumb_Up" || name == "Thumb_Down")) name else null
+                 onResult(accepted, result.timestampMs())
+             }
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GestureVoteGate.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GestureVoteGate.kt
+new file mode 100644
+index 0000000..61d2443
+--- /dev/null
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/GestureVoteGate.kt
+@@ -0,0 +1,43 @@
++package ir.bootic.store_app
++
++/** Two agreeing observations in a short window, tolerating a missed detection.
++ * A held thumb never advances multiple garments: lower the hand to rearm. */
++internal class GestureVoteGate {
++    private var candidate: String? = null
++    private var candidateSince = 0L
++    private var neutralSince: Long? = null
++    private var armed = true
++    private var lastVote = -1000L
++
++    fun reset() {
++        candidate = null
++        neutralSince = null
++        armed = true
++        lastVote = -1000L
++    }
++
++    fun update(label: String?, timestamp: Long, enabled: Boolean): String? {
++        if (label == null) {
++            if (neutralSince == null) neutralSince = timestamp
++            if (timestamp - neutralSince!! >= 250) {
++                armed = true
++                candidate = null
++            }
++            return null
++        }
++        neutralSince = null
++        if (!enabled || !armed || timestamp - lastVote < 900) {
++            candidate = null
++            return null
++        }
++        if (candidate != label || timestamp - candidateSince > 500) {
++            candidate = label
++            candidateSince = timestamp
++            return null
++        }
++        candidate = null
++        armed = false
++        lastVote = timestamp
++        return label
++    }
++}
+diff --git a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+index 90495de..c42e06c 100644
+--- a/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
++++ b/apps/store_app/android/app/src/main/kotlin/ir/bootic/store_app/MainActivity.kt
+@@ -53,8 +53,11 @@ class MainActivity : FlutterActivity() {
+     private var pendingStart: MethodChannel.Result? = null
+     private var pendingCapture: MethodChannel.Result? = null
+     @Volatile private var running = false
+-    private var cameraGeneration = 0
++    @Volatile private var cameraGeneration = 0
+     @Volatile private var mirror = true
++    private var frontCamera = true
++    private var votingEnabled = false
++    private val voteGate = GestureVoteGate()
+     private var garment: Bitmap? = null
+     private var placement = Placement()
+     @Volatile private var autoPlacement = false
+@@ -73,11 +76,6 @@ class MainActivity : FlutterActivity() {
+     private var lastGestureDetectMs = 0L
+     private var lastGestureResultTs = -1L
+     private var validGestureAfterMs = 0L
+-    private var gestureCandidate: String? = null
+-    private var gestureCount = 0
+-    private var neutralCount = 0
+-    private var gestureArmed = true
+-    private var lastVoteMs = 0L
+     private var priceText = ""
+     private var feedbackText = ""
+     private val staleHandler = Handler(Looper.getMainLooper())
+@@ -151,7 +149,7 @@ class MainActivity : FlutterActivity() {
+                     val view = PreviewView(context).apply {
+                         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                         scaleType = PreviewView.ScaleType.FILL_CENTER
+-                        scaleX = if (mirror) 1f else -1f
++                        scaleX = if (mirror == frontCamera) 1f else -1f
+                     }
+                     previewView = view
+                     if (running) bindCamera()
+@@ -179,6 +177,13 @@ class MainActivity : FlutterActivity() {
+     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {
+         when (call.method) {
+             "start" -> startCamera(result)
++            "setCameraFacing" -> setCameraFacing(call, result)
++            "removeGarmentBackground" -> GarmentCutout(this, cameraExecutor)
++                .process(call.argument<String>("path"), result)
++            "setVotingEnabled" -> {
++                votingEnabled = call.argument<Boolean>("enabled") == true
++                result.success(null)
++            }
+             "stop" -> { stopCamera(); result.success(null) }
+             "captureGarment" -> {
+                 if (pendingCapture != null) {
+@@ -260,7 +265,7 @@ class MainActivity : FlutterActivity() {
+                     validPoseAfterMs = SystemClock.uptimeMillis()
+                     lastPoseResultTs = -1L
+                     hidePose()
+-                    previewView?.scaleX = if (mirror) 1f else -1f
++                    previewView?.scaleX = if (mirror == frontCamera) 1f else -1f
+                     presentation?.setMirror(mirror)
+                     result.success(null)
+                 }
+@@ -409,10 +414,7 @@ class MainActivity : FlutterActivity() {
+     }
+ 
+     private fun resetGestureState() {
+-        gestureCandidate = null
+-        gestureCount = 0
+-        neutralCount = 0
+-        gestureArmed = true
++        voteGate.reset()
+         lastGestureResultTs = -1L
+         validGestureAfterMs = SystemClock.uptimeMillis()
+     }
+@@ -437,29 +439,10 @@ class MainActivity : FlutterActivity() {
+         if (!running || !gestureEnabled || timestamp < validGestureAfterMs ||
+             timestamp <= lastGestureResultTs) return
+         lastGestureResultTs = timestamp
+-        if (label == null) {
+-            gestureCandidate = null
+-            gestureCount = 0
+-            neutralCount++
+-            if (neutralCount >= 4 && SystemClock.uptimeMillis() - lastVoteMs >= 1600) {
+-                gestureArmed = true
+-            }
+-            return
+-        }
+-        if (!gestureArmed && neutralCount >= 4 &&
+-            SystemClock.uptimeMillis() - lastVoteMs >= 1600) gestureArmed = true
+-        neutralCount = 0
+-        if (!gestureArmed || SystemClock.uptimeMillis() - lastVoteMs < 1600) return
+-        if (gestureCandidate == label) gestureCount++ else {
+-            gestureCandidate = label
+-            gestureCount = 1
+-        }
+-        if (gestureCount < 3) return
+-        gestureArmed = false
+-        lastVoteMs = SystemClock.uptimeMillis()
+-        gestureCandidate = null
+-        gestureCount = 0
+-        eventSink?.success(mapOf("type" to "gestureVote", "liked" to (label == "Thumb_Up")))
++        val vote = voteGate.update(label, timestamp, votingEnabled) ?: return
++        // Do not consume gestures while Flutter is loading a garment or showing feedback.
++        votingEnabled = false
++        eventSink?.success(mapOf("type" to "gestureVote", "liked" to (vote == "Thumb_Up")))
+     }
+ 
+     private fun hidePose() {
+@@ -525,7 +508,7 @@ class MainActivity : FlutterActivity() {
+             val root = filesDir.canonicalFile
+             val file = File(path).canonicalFile
+             if (!file.path.startsWith(root.path + File.separator) ||
+-                !file.name.endsWith(".jpg", ignoreCase = true) ||
++                file.extension.lowercase() !in setOf("jpg", "jpeg", "png") ||
+                 !file.isFile || file.length() > 15L * 1024 * 1024) {
+                 throw IllegalArgumentException()
+             }
+@@ -552,7 +535,7 @@ class MainActivity : FlutterActivity() {
+     }
+ 
+     private fun startCamera(result: MethodChannel.Result) {
+-        if (running && provider != null) { result.success(mapOf("available" to true)); return }
++        if (running && provider != null) { result.success(mapOf("available" to true, "front" to frontCamera)); return }
+         if (pendingStart != null) { result.error("BUSY", "دوربین در حال آماده‌سازی است", null); return }
+         if (previewView == null) { result.error("NO_PREVIEW", "پیش‌نمایش دوربین آماده نیست", null); return }
+         pendingStart = result
+@@ -580,6 +563,38 @@ class MainActivity : FlutterActivity() {
+         }
+     }
+ 
++    private fun setCameraFacing(call: MethodCall, result: MethodChannel.Result) {
++        val requested = call.argument<Boolean>("front")
++        val current = provider
++        if (requested == null || !running || current == null) {
++            result.error("CAMERA_STOPPED", "ابتدا دوربین را باز کنید", null)
++            return
++        }
++        if (pendingStart != null) { result.error("BUSY", "دوربین در حال آماده‌سازی است", null); return }
++        val selector = if (requested) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
++        try {
++            if (!current.hasCamera(selector)) {
++                result.error("CAMERA_UNAVAILABLE", "دوربین انتخاب‌شده در دسترس نیست", null)
++                return
++            }
++        } catch (_: Exception) {
++            result.error("CAMERA_UNAVAILABLE", "بررسی دوربین ممکن نشد", null)
++            return
++        }
++        frontCamera = requested
++        mirror = requested
++        votingEnabled = false
++        validPoseAfterMs = SystemClock.uptimeMillis()
++        lastPoseResultTs = -1L
++        resetGestureState()
++        hidePose()
++        presentation?.clearFrame()
++        presentation?.setMirror(mirror)
++        previewView?.scaleX = 1f // CameraX mirrors only its front-camera preview.
++        pendingStart = result
++        bindCamera()
++    }
++
+     private fun bindCamera() {
+         val preview = previewView ?: run { failStart("NO_PREVIEW", "پیش‌نمایش دوربین آماده نیست"); return }
+         running = true
+@@ -589,9 +604,17 @@ class MainActivity : FlutterActivity() {
+             if (!running || generation != cameraGeneration || isFinishing || isDestroyed) return@addListener
+             try {
+                 val current = future.get()
+-                if (!current.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+-                    failStart("NO_FRONT_CAMERA", "دوربین جلو در دسترس نیست")
+-                    return@addListener
++                var selector = if (frontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
++                if (!current.hasCamera(selector)) {
++                    selector = if (frontCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
++                    if (!current.hasCamera(selector)) {
++                        failStart("CAMERA_UNAVAILABLE", "هیچ دوربینی در دسترس نیست")
++                        return@addListener
++                    }
++                    frontCamera = !frontCamera
++                    mirror = frontCamera
++                    preview.scaleX = 1f
++                    presentation?.setMirror(mirror)
+                 }
+                 current.unbindAll()
+                 provider = current
+@@ -603,11 +626,11 @@ class MainActivity : FlutterActivity() {
+                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                     .setTargetResolution(Size(640, 480))
+                     .build()
+-                analysis.setAnalyzer(cameraExecutor) { image -> renderForPresentation(image) }
+-                current.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, cameraPreview, analysis)
++                analysis.setAnalyzer(cameraExecutor) { image -> renderForPresentation(image, generation) }
++                current.bindToLifecycle(this, selector, cameraPreview, analysis)
+                 staleHandler.removeCallbacks(staleCheck)
+                 if (autoPlacement) staleHandler.postDelayed(staleCheck, 200)
+-                pendingStart?.success(mapOf("available" to true))
++                pendingStart?.success(mapOf("available" to true, "front" to frontCamera))
+                 pendingStart = null
+             } catch (_: Exception) {
+                 failStart("CAMERA_FAILED", "راه‌اندازی دوربین ممکن نشد")
+@@ -615,16 +638,16 @@ class MainActivity : FlutterActivity() {
+         }, ContextCompat.getMainExecutor(this))
+     }
+ 
+-    private fun renderForPresentation(image: ImageProxy) {
++    private fun renderForPresentation(image: ImageProxy, generation: Int) {
+         var queuedFrame = false
+         try {
+-            if (!running || (presentation == null && !autoPlacement && !gestureEnabled)) return
++            if (!running || generation != cameraGeneration || (presentation == null && !autoPlacement && !gestureEnabled)) return
+             val plane = image.planes[0]
+             if (plane.pixelStride != 4 || plane.rowStride < image.width * 4) return
+             val now = SystemClock.uptimeMillis()
+             val infer = autoPlacement && poseTracker != null && now - lastDetectMs >= 100
+             val inferGesture = gestureEnabled && gestureTracker != null &&
+-                now - lastGestureDetectMs >= 180
++                now - lastGestureDetectMs >= 120
+             val project = presentation != null && framePending.compareAndSet(false, true)
+             if (!infer && !inferGesture && !project) return
+             queuedFrame = project
+@@ -644,6 +667,10 @@ class MainActivity : FlutterActivity() {
+             }
+             val frame = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, transform, true)
+             if (frame !== raw) raw.recycle()
++            if (!running || generation != cameraGeneration) {
++                if (project) framePending.set(false)
++                return
++            }
+             if (infer) {
+                 lastDetectMs = now
+                 try { poseTracker?.detect(frame, now) } catch (_: Exception) {
+@@ -658,7 +685,7 @@ class MainActivity : FlutterActivity() {
+             }
+             if (project) {
+                 runOnUiThread {
+-                    if (running) presentation?.showFrame(frame)
++                    if (running && generation == cameraGeneration) presentation?.showFrame(frame)
+                     // ImageView drops its previous bitmap after replacement; Android's
+                     // rendering pipeline/GC releases it when drawing is finished.
+                     framePending.set(false)
+@@ -680,6 +707,7 @@ class MainActivity : FlutterActivity() {
+ 
+     private fun stopCamera() {
+         running = false
++        votingEnabled = false
+         gestureEnabled = false
+         gestureGeneration++
+         pendingGesture?.error("STOPPED", "دوربین متوقف شد", null)
+@@ -725,7 +753,7 @@ private class CustomerPresentation(context: Context, display: Display) : android
+         scene.addView(camera, FrameLayout.LayoutParams(-1, -1))
+         overlay = ImageView(context).apply {
+             scaleType = ImageView.ScaleType.FIT_XY
+-            alpha = 0.78f
++            alpha = 1f
+         }
+         scene.addView(overlay)
+         price = android.widget.TextView(context).apply {
+diff --git a/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/GestureVoteGateTest.kt b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/GestureVoteGateTest.kt
+new file mode 100644
+index 0000000..c53c55b
+--- /dev/null
++++ b/apps/store_app/android/app/src/test/kotlin/ir/bootic/store_app/GestureVoteGateTest.kt
+@@ -0,0 +1,43 @@
++package ir.bootic.store_app
++
++import org.junit.Assert.*
++import org.junit.Test
++
++class GestureVoteGateTest {
++    @Test fun toleratesOneMissButDoesNotAcceptASingleFrame() {
++        val gate = GestureVoteGate()
++        assertNull(gate.update("Thumb_Up", 1000, true))
++        assertNull(gate.update(null, 1120, true))
++        assertEquals("Thumb_Up", gate.update("Thumb_Up", 1240, true))
++    }
++
++    @Test fun heldThumbDoesNotVoteOnNextGarment() {
++        val gate = GestureVoteGate()
++        gate.update("Thumb_Up", 1000, true)
++        assertEquals("Thumb_Up", gate.update("Thumb_Up", 1120, true))
++        for (time in 1240L..4000L step 120) {
++            assertNull(gate.update("Thumb_Up", time, true))
++        }
++        gate.update(null, 4100, false)
++        gate.update(null, 4460, false)
++        assertNull(gate.update("Thumb_Down", 4580, true))
++        assertEquals("Thumb_Down", gate.update("Thumb_Down", 4700, true))
++    }
++
++    @Test fun disabledVotingCannotConsumeTheNextVote() {
++        val gate = GestureVoteGate()
++        gate.update("Thumb_Up", 1000, false)
++        gate.update("Thumb_Up", 1120, false)
++        assertNull(gate.update("Thumb_Up", 1240, true))
++        assertEquals("Thumb_Up", gate.update("Thumb_Up", 1360, true))
++    }
++
++    @Test fun staleOrConflictingFramesDoNotBuildAgreement() {
++        val gate = GestureVoteGate()
++        gate.update("Thumb_Up", 1000, true)
++        assertNull(gate.update("Thumb_Up", 2000, true))
++        assertNull(gate.update("Thumb_Down", 2120, true))
++        assertNull(gate.update("Thumb_Up", 2240, true))
++        assertEquals("Thumb_Up", gate.update("Thumb_Up", 2360, true))
++    }
++}
+diff --git a/apps/store_app/lib/application/live_tryon_bridge.dart b/apps/store_app/lib/application/live_tryon_bridge.dart
+index 8c9c69f..f25ebd4 100644
+--- a/apps/store_app/lib/application/live_tryon_bridge.dart
++++ b/apps/store_app/lib/application/live_tryon_bridge.dart
+@@ -65,7 +65,24 @@ class LiveTryonBridge {
+             (value as Map)['message'] as String? ?? 'تشخیص علامت دست متوقف شد.',
+       );
+ 
+-  Future<void> start() async => _channel.invokeMethod<void>('start');
++  Future<bool> start() async {
++    final state = await _channel.invokeMapMethod<String, dynamic>('start');
++    return state?['front'] as bool? ?? true;
++  }
++
++  Future<bool> setCameraFacing(bool front) async {
++    final state = await _channel.invokeMapMethod<String, dynamic>(
++      'setCameraFacing',
++      {'front': front},
++    );
++    return state?['front'] as bool? ?? front;
++  }
++
++  Future<void> setVotingEnabled(bool enabled) async =>
++      _channel.invokeMethod<void>('setVotingEnabled', {'enabled': enabled});
++
++  Future<void> removeGarmentBackground(String path) async =>
++      _channel.invokeMethod<void>('removeGarmentBackground', {'path': path});
+ 
+   Future<void> stop() async => _channel.invokeMethod<void>('stop');
+ 
+diff --git a/apps/store_app/lib/data/local_asset_store.dart b/apps/store_app/lib/data/local_asset_store.dart
+index aaaa85b..cf92b25 100644
+--- a/apps/store_app/lib/data/local_asset_store.dart
++++ b/apps/store_app/lib/data/local_asset_store.dart
+@@ -21,7 +21,7 @@ class LocalAssetStore {
+     if (await source.length() > 15 * 1024 * 1024) {
+       throw ArgumentError('حجم عکس باید کمتر از ۱۵ مگابایت باشد');
+     }
+-    final relative = p.join('garments', '${const Uuid().v4()}.jpg');
++    final relative = p.join('garments', '${const Uuid().v4()}.png');
+     final target = resolve(relative);
+     await target.parent.create(recursive: true);
+     final destination = target.path;
+@@ -39,12 +39,33 @@ class LocalAssetStore {
+       final decoded = decoder!.decodeFrame(0);
+       if (decoded == null) throw ArgumentError('خواندن عکس ممکن نشد');
+       final oriented = img.bakeOrientation(decoded);
+-      // Copy pixels to strip EXIF (including location), then encode a real JPEG.
+-      final clean = img.Image(width: oriented.width, height: oriented.height);
+-      img.compositeImage(clean, oriented);
++      final bounded = oriented.width > 1600 || oriented.height > 1600
++          ? img.copyResize(
++              oriented,
++              width: oriented.width >= oriented.height ? 1600 : null,
++              height: oriented.height > oriented.width ? 1600 : null,
++            )
++          : oriented;
++      // Copy RGBA pixels to strip EXIF (including location) without losing alpha.
++      final rgba = bounded.convert(format: img.Format.uint8, numChannels: 4);
++      final clean = img.Image(
++        width: rgba.width,
++        height: rgba.height,
++        numChannels: 4,
++      );
++      for (final pixel in rgba) {
++        clean.setPixelRgba(
++          pixel.x,
++          pixel.y,
++          pixel.r,
++          pixel.g,
++          pixel.b,
++          pixel.a,
++        );
++      }
+       final temp = File('$destination.tmp');
+       try {
+-        await temp.writeAsBytes(img.encodeJpg(clean, quality: 90), flush: true);
++        await temp.writeAsBytes(img.encodePng(clean), flush: true);
+         await temp.rename(destination);
+       } finally {
+         if (await temp.exists()) await temp.delete();
+diff --git a/apps/store_app/lib/presentation/garment_editor_screen.dart b/apps/store_app/lib/presentation/garment_editor_screen.dart
+index d55801a..64c2697 100644
+--- a/apps/store_app/lib/presentation/garment_editor_screen.dart
++++ b/apps/store_app/lib/presentation/garment_editor_screen.dart
+@@ -278,6 +278,42 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+     }
+   }
+ 
++  Future<String> _importCutout(String source) async {
++    final store = ref.read(assetStoreProvider);
++    final relative = await store.importPhoto(source);
++    try {
++      if (Platform.isAndroid) {
++        await const LiveTryonBridge().removeGarmentBackground(
++          store.resolve(relative).path,
++        );
++      }
++      return relative;
++    } catch (_) {
++      await store.resolve(relative).delete();
++      rethrow;
++    }
++  }
++
++  Future<void> _removeBackground(String angle) async {
++    final source = _photos[angle];
++    if (_photoBusy || source == null) return;
++    setState(() => _photoBusy = true);
++    try {
++      // Work on a fresh copy; keep the previous photo if segmentation fails.
++      final relative = await _importCutout(
++        ref.read(assetStoreProvider).resolve(source).path,
++      );
++      if (!mounted) return;
++      _photos[angle] = relative;
++      _changed();
++      await _persist(quiet: true);
++    } catch (error) {
++      if (mounted) showNotice(context, friendlyError(error));
++    } finally {
++      if (mounted) setState(() => _photoBusy = false);
++    }
++  }
++
+   Future<void> _pickPhoto(String angle, {bool camera = false}) async {
+     if (_photoBusy) return;
+     setState(() => _photoBusy = true);
+@@ -298,7 +334,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+         ))?.path;
+       }
+       if (sourcePath == null || !mounted) return;
+-      final path = await ref.read(assetStoreProvider).importPhoto(sourcePath);
++      final path = await _importCutout(sourcePath);
+       if (!mounted) return;
+       _photos[angle] = path;
+       _changed();
+@@ -492,8 +528,12 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                         'لباس را روی زمینه ساده، با نور یکنواخت و بدون حضور مشتری عکاسی کنید. چهار نمای روبرو، پشت، چپ و راست را از گالری انتخاب کنید. برای کاتالوگ عکس روبرو ضروری است.',
+                       ),
+                       const Text(
+-                        'کیفیت‌سنجی خودکار و اندازه‌گیری از عکس هنوز فعال نیست؛ عکس‌ها را خودتان بررسی کنید.',
++                        'لباس را به‌تنهایی، بدون پوشیدن و با فاصله از پس‌زمینه عکس بگیرید. پس‌زمینه خودکار حذف می‌شود؛ اولین بار اینترنت و سرویس‌های گوگل لازم است.',
+                       ),
++                      if (_photoBusy) ...[
++                        const LinearProgressIndicator(),
++                        const Text('در حال آماده‌سازی عکس و حذف پس‌زمینه…'),
++                      ],
+                       for (final angle in photoAngles.entries)
+                         Column(
+                           crossAxisAlignment: CrossAxisAlignment.stretch,
+@@ -537,12 +577,23 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
+                                   icon: const Icon(Icons.photo_camera_outlined),
+                                   label: const Text('عکس با دوربین'),
+                                 ),
++                                if (Platform.isAndroid &&
++                                    _photos[angle.key] != null)
++                                  OutlinedButton.icon(
++                                    onPressed: _photoBusy
++                                        ? null
++                                        : () => _removeBackground(angle.key),
++                                    icon: const Icon(Icons.auto_fix_high),
++                                    label: const Text('حذف پس‌زمینه'),
++                                  ),
+                                 if (_photos[angle.key] != null)
+                                   TextButton(
+-                                    onPressed: () {
+-                                      _photos.remove(angle.key);
+-                                      _changed();
+-                                    },
++                                    onPressed: _photoBusy
++                                        ? null
++                                        : () {
++                                            _photos.remove(angle.key);
++                                            _changed();
++                                          },
+                                     child: const Text('برداشتن عکس'),
+                                   ),
+                               ],
+diff --git a/apps/store_app/lib/presentation/live_tryon_screen.dart b/apps/store_app/lib/presentation/live_tryon_screen.dart
+index 8080fdb..42ec77e 100644
+--- a/apps/store_app/lib/presentation/live_tryon_screen.dart
++++ b/apps/store_app/lib/presentation/live_tryon_screen.dart
+@@ -30,10 +30,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+   Timer? _nextTimer;
+   int _session = 0;
+ 
++  bool _frontCamera = true;
++  bool _switchingCamera = false;
+   bool _running = false;
+   bool _busy = false;
+   bool _personFound = false;
+   bool _detecting = false;
++  bool _garmentReady = false;
+   bool _gestureReady = false;
+   bool _votePending = false;
+   bool _finished = false;
+@@ -94,7 +97,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+     if (error is PlatformException) {
+       return switch (error.code) {
+         'CAMERA_DENIED' || 'CAMERA_PERMISSION' => 'اجازه دوربین را فعال کنید.',
+-        'CAMERA_UNAVAILABLE' => 'دوربین جلو در دسترس نیست.',
++        'CAMERA_UNAVAILABLE' => 'دوربین انتخاب‌شده در دسترس نیست.',
+         'POSE_UNAVAILABLE' => 'تشخیص بدن روی این گوشی آماده نشد.',
+         _ => error.message ?? 'دوربین آماده نشد.',
+       };
+@@ -127,11 +130,28 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+     }
+   }
+ 
++  Future<void> _syncVoting() => _bridge.setVotingEnabled(
++    mounted &&
++        _running &&
++        _personFound &&
++        _garmentReady &&
++        !_busy &&
++        !_switchingCamera &&
++        !_votePending &&
++        !_finished,
++  );
++
+   Future<void> _presentGarment(Garment? garment) async {
++    final session = _session;
++    if (mounted) setState(() => _garmentReady = false);
++    await _bridge.setVotingEnabled(false);
+     await _bridge.setGarment(_photoPath(garment));
+     await _bridge.setPrice(
+       garment == null ? '' : '${faNumber(garment.effectivePrice)} تومان',
+     );
++    if (!mounted || session != _session || !_running) return;
++    setState(() => _garmentReady = garment != null);
++    await _syncVoting();
+   }
+ 
+   void _onPlacement(LivePlacement placement) {
+@@ -184,15 +204,17 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+       _finished = false;
+       _votePending = false;
+       _gestureReady = false;
++      _garmentReady = false;
+       _voteFeedback = null;
+       _votes.clear();
+     });
+     try {
+-      await _bridge.start();
+-      if (!mounted || session != _session) return;
+-      setState(() => _running = true);
+-      await _bridge.setMirror(true);
++      final front = await _bridge.start();
+       if (!mounted || session != _session) return;
++      setState(() {
++        _running = true;
++        _frontCamera = front;
++      });
+       await _presentGarment(null);
+       if (!mounted || session != _session) return;
+       await _bridge.setFeedback('');
+@@ -224,7 +246,14 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+         });
+       }
+     } finally {
+-      if (mounted && session == _session) setState(() => _busy = false);
++      if (mounted && session == _session) {
++        setState(() => _busy = false);
++        try {
++          await _syncVoting();
++        } catch (error) {
++          _showError(error);
++        }
++      }
+     }
+   }
+ 
+@@ -247,6 +276,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+           _personFound = false;
+           _detecting = false;
+           _gestureReady = false;
++          _garmentReady = false;
+           _votePending = false;
+         });
+       }
+@@ -256,9 +286,10 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+   Future<void> _vote(bool liked) async {
+     if (!_running ||
+         !_personFound ||
+-        _placement?.visible != true ||
++        !_garmentReady ||
+         _garmentId == null ||
+         _busy ||
++        _switchingCamera ||
+         _votePending ||
+         _finished) {
+       return;
+@@ -272,6 +303,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+       _voteFeedback = liked ? 'پسندیدید' : 'نپسندیدید';
+     });
+     try {
++      await _bridge.setVotingEnabled(false);
+       await _bridge.setFeedback(_voteFeedback!);
+     } catch (error) {
+       _showError(error);
+@@ -299,6 +331,45 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+     });
+   }
+ 
++  Future<void> _switchCamera() async {
++    if (!_running || _busy || _switchingCamera || _votePending) return;
++    final session = _session;
++    final requested = !_frontCamera;
++    _detectionTimer?.cancel();
++    setState(() {
++      _switchingCamera = true;
++      _detecting = false;
++      _placement = null;
++      _error = null;
++    });
++    try {
++      await _bridge.setVotingEnabled(false);
++      final actualFront = await _bridge.setCameraFacing(requested);
++      if (!mounted || session != _session) return;
++      setState(() => _frontCamera = actualFront);
++    } catch (error) {
++      if (!mounted || session != _session) return;
++      if (error is! PlatformException || error.code != 'CAMERA_UNAVAILABLE') {
++        await _stop();
++      }
++      _showError(error);
++    } finally {
++      if (mounted) {
++        setState(() => _switchingCamera = false);
++        if (_running &&
++            session == _session &&
++            _garmentId != null &&
++            !_finished) {
++          try {
++            await _syncVoting();
++          } catch (error) {
++            _showError(error);
++          }
++        }
++      }
++    }
++  }
++
+   Future<void> _restart() async {
+     _votes.clear();
+     setState(() {
+@@ -348,14 +419,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+                     child: IgnorePointer(
+                       child: Transform(
+                         alignment: Alignment.center,
+-                        transform: Matrix4.rotationY(math.pi),
+-                        child: Opacity(
+-                          opacity: 0.78,
+-                          child: Image.file(
+-                            File(photo),
+-                            fit: BoxFit.fill,
+-                            errorBuilder: (_, _, _) => const SizedBox(),
+-                          ),
++                        transform: Matrix4.rotationY(
++                          _frontCamera ? math.pi : 0,
++                        ),
++                        child: Image.file(
++                          File(photo),
++                          fit: BoxFit.fill,
++                          errorBuilder: (_, _, _) => const SizedBox(),
+                         ),
+                       ),
+                     ),
+@@ -418,7 +488,10 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+                   Platform.isAndroid
+                       ? const CircularProgressIndicator(color: Colors.white)
+                       : _badge('دوربین زنده روی نسخه اندروید در دسترس است', 16),
+-                if (visible && !_finished && selected != null) ...[
++                if (_running &&
++                    _personFound &&
++                    !_finished &&
++                    selected != null) ...[
+                   const SizedBox(height: 8),
+                   _badge(selected.name, 16),
+                   const SizedBox(height: 8),
+@@ -426,7 +499,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+                     children: [
+                       Expanded(
+                         child: FilledButton.icon(
+-                          onPressed: _votePending ? null : () => _vote(true),
++                          onPressed:
++                              !_garmentReady ||
++                                  _busy ||
++                                  _votePending ||
++                                  _switchingCamera
++                              ? null
++                              : () => _vote(true),
+                           icon: const Icon(Icons.thumb_up_alt_outlined),
+                           label: const Text('لایک'),
+                         ),
+@@ -434,7 +513,13 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+                       const SizedBox(width: 8),
+                       Expanded(
+                         child: FilledButton.tonalIcon(
+-                          onPressed: _votePending ? null : () => _vote(false),
++                          onPressed:
++                              !_garmentReady ||
++                                  _busy ||
++                                  _votePending ||
++                                  _switchingCamera
++                              ? null
++                              : () => _vote(false),
+                           icon: const Icon(Icons.thumb_down_alt_outlined),
+                           label: const Text('دیسلایک'),
+                         ),
+@@ -445,11 +530,29 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
+                     const Padding(
+                       padding: EdgeInsets.only(top: 8),
+                       child: Text(
+-                        'شست بالا یا پایین را هم می‌توانید نشان دهید',
++                        'شست بالا یا پایین؛ بعد از ثبت، دست را پایین بیاورید',
+                         style: TextStyle(color: Colors.white),
+                       ),
+                     ),
+                 ],
++                if (_running) ...[
++                  const SizedBox(height: 8),
++                  IconButton.filledTonal(
++                    tooltip: _frontCamera
++                        ? 'استفاده از دوربین عقب'
++                        : 'استفاده از دوربین جلو',
++                    onPressed: _busy || _switchingCamera || _votePending
++                        ? null
++                        : _switchCamera,
++                    icon: _switchingCamera
++                        ? const SizedBox(
++                            width: 24,
++                            height: 24,
++                            child: CircularProgressIndicator(strokeWidth: 2),
++                          )
++                        : const Icon(Icons.cameraswitch_outlined),
++                  ),
++                ],
+                 if (_running && _finished)
+                   FilledButton(
+                     onPressed: _restart,
+diff --git a/apps/store_app/test/assets_test.dart b/apps/store_app/test/assets_test.dart
+index 18d1d37..72cf4c3 100644
+--- a/apps/store_app/test/assets_test.dart
++++ b/apps/store_app/test/assets_test.dart
+@@ -5,28 +5,65 @@ import 'package:store_app/data/local_asset_store.dart';
+ import 'package:store_app/application/processing_service.dart';
+ 
+ void main() {
+-  test('import stores a real decoded image and rejects traversal and invalid files', () async {
+-    final dir = await Directory.systemTemp.createTemp('bootic-assets-');
+-    try {
+-      final store = LocalAssetStore(Directory('${dir.path}/private'));
+-      final source = File('${dir.path}/source.png');
+-      final image = img.Image(width: 128, height: 100);
+-      img.fill(image, color: img.ColorRgb8(20, 80, 150));
+-      await source.writeAsBytes(img.encodePng(image));
+-      final relative = await store.importPhoto(source.path);
+-      await source.delete();
+-      final decoded = img.decodeJpg(await store.resolve(relative).readAsBytes())!;
+-      expect(decoded.width, 128);
+-      expect(decoded.height, 100);
+-      expect(decoded.getPixel(64, 50).b, greaterThan(140));
+-      expect(() => store.resolve('../outside.jpg'), throwsArgumentError);
+-      final invalid = File('${dir.path}/fake.jpg');
+-      await invalid.writeAsString('not an image');
+-      await expectLater(store.importPhoto(invalid.path), throwsArgumentError);
+-      expect(await store.resolve(relative).exists(), isTrue);
+-    } finally { await dir.delete(recursive: true); }
+-  });
+-  test('disconnected AI reports unavailability instead of producing a ready result', () async {
+-    await expectLater(ProcessingService().analyze('local-garment'), throwsA(isA<ProcessingUnavailable>()));
+-  });
++  test(
++    'import preserves transparent and partially transparent garment pixels',
++    () async {
++      final dir = await Directory.systemTemp.createTemp('bootic-alpha-');
++      try {
++        final store = LocalAssetStore(Directory('${dir.path}/private'));
++        final source = File('${dir.path}/cutout.png');
++        final image = img.Image(width: 128, height: 100, numChannels: 4);
++        image.setPixelRgba(64, 50, 20, 80, 150, 255);
++        image.setPixelRgba(65, 50, 20, 80, 150, 128);
++        await source.writeAsBytes(img.encodePng(image));
++        final relative = await store.importPhoto(source.path);
++        final decoded = img.decodeImage(
++          await store.resolve(relative).readAsBytes(),
++        )!;
++        expect(decoded.getPixel(0, 0).a, 0);
++        expect(decoded.getPixel(64, 50).a, 255);
++        expect(decoded.getPixel(65, 50).a, 128);
++        expect(relative, endsWith('.png'));
++      } finally {
++        await dir.delete(recursive: true);
++      }
++    },
++  );
++  test(
++    'import stores a real decoded image and rejects traversal and invalid files',
++    () async {
++      final dir = await Directory.systemTemp.createTemp('bootic-assets-');
++      try {
++        final store = LocalAssetStore(Directory('${dir.path}/private'));
++        final source = File('${dir.path}/source.png');
++        final image = img.Image(width: 128, height: 100);
++        img.fill(image, color: img.ColorRgb8(20, 80, 150));
++        await source.writeAsBytes(img.encodePng(image));
++        final relative = await store.importPhoto(source.path);
++        await source.delete();
++        final decoded = img.decodeImage(
++          await store.resolve(relative).readAsBytes(),
++        )!;
++        expect(decoded.width, 128);
++        expect(decoded.height, 100);
++        expect(decoded.getPixel(64, 50).b, greaterThan(140));
++        expect(() => store.resolve('../outside.jpg'), throwsArgumentError);
++        final invalid = File('${dir.path}/fake.jpg');
++        await invalid.writeAsString('not an image');
++        await expectLater(store.importPhoto(invalid.path), throwsArgumentError);
++        expect(await store.resolve(relative).exists(), isTrue);
++      } finally {
++        await dir.delete(recursive: true);
++      }
++    },
++  );
++  test(
++    'disconnected AI reports unavailability instead of producing a ready result',
++    () async {
++      await expectLater(
++        ProcessingService().analyze('local-garment'),
++        throwsA(isA<ProcessingUnavailable>()),
++      );
++    },
++  );
+ }
+diff --git a/docs/tryon-fixes.md b/docs/tryon-fixes.md
+new file mode 100644
+index 0000000..404c228
+--- /dev/null
++++ b/docs/tryon-fixes.md
+@@ -0,0 +1,38 @@
++# اصلاح پرو زنده، عکس لباس و علامت دست
++
++مبنای patch: `ff2679031ac31777ddbfe64b6e2ae065e93f5a6d`.
++
++## اعمال تغییرات
++
++در ریشهٔ مخزن:
++
++```sh
++git apply --check bootic-fixes.patch
++git apply bootic-fixes.patch
++cd apps/store_app
++flutter pub get
++flutter test
++flutter build apk --debug
++```
++
++## تغییر رفتار
++
++- علامت شست با دو مشاهدهٔ موافق در بازهٔ ۵۰۰ میلی‌ثانیه ثبت می‌شود و یک مشاهدهٔ ناموفق را تحمل می‌کند. بعد از هر رأی، دست را حداقل ۲۵۰ میلی‌ثانیه پایین بیاورید. نگه‌داشتن شست چند لباس را رد نمی‌کند.
++- رأی تنها وقتی لباس آماده است فعال می‌شود. گم‌شدن موقت تشخیص بدن، دکمه‌های رأی را پنهان نمی‌کند.
++- عکس‌ها با کانال آلفا و قالب PNG ذخیره می‌شوند. عکس‌های جدید در اندروید با مدل تفکیک سوژه پردازش و حاشیه‌های خالی بریده می‌شوند. اگر پردازش شکست بخورد، عکس قبلی حفظ می‌شود؛ عکس مستطیلی به‌جای نتیجهٔ شفاف ذخیره نمی‌شود.
++- برای عکس‌های قدیمی، در ویرایش لباس روی «حذف پس‌زمینه» بزنید. نسخهٔ تازه ساخته می‌شود و فایل قبلی دست‌کاری نمی‌شود.
++- پایین صفحهٔ مشتری دکمهٔ تعویض دوربین جلو/عقب اضافه شده است. تشخیص بدن، دست و نمایشگر دوم از دوربین انتخاب‌شده استفاده می‌کنند. دوربین عقب آینه‌ای نیست.
++
++## نکات عکس‌برداری و مدل
++
++لباس را به‌تنهایی، بدون پوشیدن، روی چوب‌لباسی یا سطح مناسب، با پس‌زمینهٔ خلوت و فاصله از آن ثبت کنید. این مدل سوژهٔ اصلی را جدا می‌کند؛ اگر لباس بر تن فرد باشد ممکن است فرد و لباس را با هم نگه دارد. نتیجهٔ تفکیک سوژه را اپراتور باید بازبینی کند.
++
++مدل روی دستگاه اجرا می‌شود؛ آماده‌سازی نخست به اینترنت و Google Play services نیاز دارد. قبل از آماده‌شدن مدل یا در صورت خطا، پیام قابل‌فهم نمایش داده می‌شود و می‌توان دوباره تلاش کرد. این نسخه برای گوشی‌های بدون سرویس‌های گوگل جایگزین تفکیک سوژه ندارد. تفکیک پس‌زمینه در این patch به اندروید اختصاص دارد.
++
++مرجع پیاده‌سازی: https://developers.google.com/ml-kit/vision/subject-segmentation/android
++
++## اعتبارسنجی
++
++چهار تست مستقل Kotlin برای تحمل یک فریم ناموفق، جلوگیری از رأی تکراری با شست ثابت، غیرفعال‌بودن رأی هنگام بارگذاری و رد مشاهدات ناسازگار اجرا شده‌اند. تست حفظ آلفای PNG و نیمه‌شفاف‌بودن لبه‌ها به تست‌های عکس اضافه شده است. بررسی مستقل Dart روی کد واقعی ذخیرهٔ عکس نیز هفت کنترل شفافیت، رنگ، قالب PNG، مسیر و فایل نامعتبر را گذراند؛ همان بررسی روی نسخهٔ اولیه در حفظ شفافیت شکست خورد.
++
++ساخت کامل APK و مجموعه‌تست Flutter در این محیط تأیید نشده‌اند؛ اجرای Flutter هنگام راه‌اندازی به‌دلیل تلاش برای دسترسی به متادیتای محیط ابری توسط بررسی خودکار مسدود شد. تست دوربین جلو/عقب، کیفیت حذف پس‌زمینه روی لباس واقعی و دانلود اولیهٔ مدل باید روی گوشی انجام شود.

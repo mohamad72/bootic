@@ -27,14 +27,16 @@ internal class GestureTracker(
                     .build(),
             )
             .setRunningMode(RunningMode.LIVE_STREAM)
-            .setNumHands(1)
-            .setMinHandDetectionConfidence(0.6f)
-            .setMinHandPresenceConfidence(0.6f)
-            .setMinTrackingConfidence(0.6f)
+            .setNumHands(2)
+            .setMinHandDetectionConfidence(0.5f)
+            .setMinHandPresenceConfidence(0.5f)
+            .setMinTrackingConfidence(0.5f)
             .setResultListener { result: GestureRecognizerResult, _: MPImage ->
-                val category = result.gestures().firstOrNull()?.firstOrNull()
+                val category = result.gestures().mapNotNull { it.firstOrNull() }
+                    .filter { it.categoryName() == "Thumb_Up" || it.categoryName() == "Thumb_Down" }
+                    .maxByOrNull { it.score() }
                 val name = category?.categoryName()
-                val accepted = if (category != null && category.score() >= 0.75f &&
+                val accepted = if (category != null && category.score() >= 0.60f &&
                     (name == "Thumb_Up" || name == "Thumb_Down")) name else null
                 onResult(accepted, result.timestampMs())
             }

@@ -65,7 +65,24 @@ class LiveTryonBridge {
             (value as Map)['message'] as String? ?? 'تشخیص علامت دست متوقف شد.',
       );
 
-  Future<void> start() async => _channel.invokeMethod<void>('start');
+  Future<bool> start() async {
+    final state = await _channel.invokeMapMethod<String, dynamic>('start');
+    return state?['front'] as bool? ?? true;
+  }
+
+  Future<bool> setCameraFacing(bool front) async {
+    final state = await _channel.invokeMapMethod<String, dynamic>(
+      'setCameraFacing',
+      {'front': front},
+    );
+    return state?['front'] as bool? ?? front;
+  }
+
+  Future<void> setVotingEnabled(bool enabled) async =>
+      _channel.invokeMethod<void>('setVotingEnabled', {'enabled': enabled});
+
+  Future<void> removeGarmentBackground(String path) async =>
+      _channel.invokeMethod<void>('removeGarmentBackground', {'path': path});
 
   Future<void> stop() async => _channel.invokeMethod<void>('stop');
 

@@ -53,8 +53,11 @@ class MainActivity : FlutterActivity() {
     private var pendingStart: MethodChannel.Result? = null
     private var pendingCapture: MethodChannel.Result? = null
     @Volatile private var running = false
-    private var cameraGeneration = 0
+    @Volatile private var cameraGeneration = 0
     @Volatile private var mirror = true
+    private var frontCamera = true
+    private var votingEnabled = false
+    private val voteGate = GestureVoteGate()
     private var garment: Bitmap? = null
     private var placement = Placement()
     @Volatile private var autoPlacement = false
@@ -73,11 +76,6 @@ class MainActivity : FlutterActivity() {
     private var lastGestureDetectMs = 0L
     private var lastGestureResultTs = -1L
     private var validGestureAfterMs = 0L
-    private var gestureCandidate: String? = null
-    private var gestureCount = 0
-    private var neutralCount = 0
-    private var gestureArmed = true
-    private var lastVoteMs = 0L
     private var priceText = ""
     private var feedbackText = ""
     private val staleHandler = Handler(Looper.getMainLooper())
@@ -151,7 +149,7 @@ class MainActivity : FlutterActivity() {
                     val view = PreviewView(context).apply {
                         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                         scaleType = PreviewView.ScaleType.FILL_CENTER
-                        scaleX = if (mirror) 1f else -1f
+                        scaleX = if (mirror == frontCamera) 1f else -1f
                     }
                     previewView = view
                     if (running) bindCamera()
@@ -179,6 +177,13 @@ class MainActivity : FlutterActivity() {
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "start" -> startCamera(result)
+            "setCameraFacing" -> setCameraFacing(call, result)
+            "removeGarmentBackground" -> GarmentCutout(this, cameraExecutor)
+                .process(call.argument<String>("path"), result)
+            "setVotingEnabled" -> {
+                votingEnabled = call.argument<Boolean>("enabled") == true
+                result.success(null)
+            }
             "stop" -> { stopCamera(); result.success(null) }
             "captureGarment" -> {
                 if (pendingCapture != null) {
@@ -260,7 +265,7 @@ class MainActivity : FlutterActivity() {
                     validPoseAfterMs = SystemClock.uptimeMillis()
                     lastPoseResultTs = -1L
                     hidePose()
-                    previewView?.scaleX = if (mirror) 1f else -1f
+                    previewView?.scaleX = if (mirror == frontCamera) 1f else -1f
                     presentation?.setMirror(mirror)
                     result.success(null)
                 }
@@ -409,10 +414,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun resetGestureState() {
-        gestureCandidate = null
-        gestureCount = 0
-        neutralCount = 0
-        gestureArmed = true
+        voteGate.reset()
         lastGestureResultTs = -1L
         validGestureAfterMs = SystemClock.uptimeMillis()
     }
@@ -437,29 +439,10 @@ class MainActivity : FlutterActivity() {
         if (!running || !gestureEnabled || timestamp < validGestureAfterMs ||
             timestamp <= lastGestureResultTs) return
         lastGestureResultTs = timestamp
-        if (label == null) {
-            gestureCandidate = null
-            gestureCount = 0
-            neutralCount++
-            if (neutralCount >= 4 && SystemClock.uptimeMillis() - lastVoteMs >= 1600) {
-                gestureArmed = true
-            }
-            return
-        }
-        if (!gestureArmed && neutralCount >= 4 &&
-            SystemClock.uptimeMillis() - lastVoteMs >= 1600) gestureArmed = true
-        neutralCount = 0
-        if (!gestureArmed || SystemClock.uptimeMillis() - lastVoteMs < 1600) return
-        if (gestureCandidate == label) gestureCount++ else {
-            gestureCandidate = label
-            gestureCount = 1
-        }
-        if (gestureCount < 3) return
-        gestureArmed = false
-        lastVoteMs = SystemClock.uptimeMillis()
-        gestureCandidate = null
-        gestureCount = 0
-        eventSink?.success(mapOf("type" to "gestureVote", "liked" to (label == "Thumb_Up")))
+        val vote = voteGate.update(label, timestamp, votingEnabled) ?: return
+        // Do not consume gestures while Flutter is loading a garment or showing feedback.
+        votingEnabled = false
+        eventSink?.success(mapOf("type" to "gestureVote", "liked" to (vote == "Thumb_Up")))
     }
 
     private fun hidePose() {
@@ -525,7 +508,7 @@ class MainActivity : FlutterActivity() {
             val root = filesDir.canonicalFile
             val file = File(path).canonicalFile
             if (!file.path.startsWith(root.path + File.separator) ||
-                !file.name.endsWith(".jpg", ignoreCase = true) ||
+                file.extension.lowercase() !in setOf("jpg", "jpeg", "png") ||
                 !file.isFile || file.length() > 15L * 1024 * 1024) {
                 throw IllegalArgumentException()
             }
@@ -552,7 +535,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun startCamera(result: MethodChannel.Result) {
-        if (running && provider != null) { result.success(mapOf("available" to true)); return }
+        if (running && provider != null) { result.success(mapOf("available" to true, "front" to frontCamera)); return }
         if (pendingStart != null) { result.error("BUSY", "دوربین در حال آماده‌سازی است", null); return }
         if (previewView == null) { result.error("NO_PREVIEW", "پیش‌نمایش دوربین آماده نیست", null); return }
         pendingStart = result
@@ -580,6 +563,38 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun setCameraFacing(call: MethodCall, result: MethodChannel.Result) {
+        val requested = call.argument<Boolean>("front")
+        val current = provider
+        if (requested == null || !running || current == null) {
+            result.error("CAMERA_STOPPED", "ابتدا دوربین را باز کنید", null)
+            return
+        }
+        if (pendingStart != null) { result.error("BUSY", "دوربین در حال آماده‌سازی است", null); return }
+        val selector = if (requested) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+        try {
+            if (!current.hasCamera(selector)) {
+                result.error("CAMERA_UNAVAILABLE", "دوربین انتخاب‌شده در دسترس نیست", null)
+                return
+            }
+        } catch (_: Exception) {
+            result.error("CAMERA_UNAVAILABLE", "بررسی دوربین ممکن نشد", null)
+            return
+        }
+        frontCamera = requested
+        mirror = requested
+        votingEnabled = false
+        validPoseAfterMs = SystemClock.uptimeMillis()
+        lastPoseResultTs = -1L
+        resetGestureState()
+        hidePose()
+        presentation?.clearFrame()
+        presentation?.setMirror(mirror)
+        previewView?.scaleX = 1f // CameraX mirrors only its front-camera preview.
+        pendingStart = result
+        bindCamera()
+    }
+
     private fun bindCamera() {
         val preview = previewView ?: run { failStart("NO_PREVIEW", "پیش‌نمایش دوربین آماده نیست"); return }
         running = true
@@ -589,9 +604,17 @@ class MainActivity : FlutterActivity() {
             if (!running || generation != cameraGeneration || isFinishing || isDestroyed) return@addListener
             try {
                 val current = future.get()
-                if (!current.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
-                    failStart("NO_FRONT_CAMERA", "دوربین جلو در دسترس نیست")
-                    return@addListener
+                var selector = if (frontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                if (!current.hasCamera(selector)) {
+                    selector = if (frontCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                    if (!current.hasCamera(selector)) {
+                        failStart("CAMERA_UNAVAILABLE", "هیچ دوربینی در دسترس نیست")
+                        return@addListener
+                    }
+                    frontCamera = !frontCamera
+                    mirror = frontCamera
+                    preview.scaleX = 1f
+                    presentation?.setMirror(mirror)
                 }
                 current.unbindAll()
                 provider = current
@@ -603,11 +626,11 @@ class MainActivity : FlutterActivity() {
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .setTargetResolution(Size(640, 480))
                     .build()
-                analysis.setAnalyzer(cameraExecutor) { image -> renderForPresentation(image) }
-                current.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, cameraPreview, analysis)
+                analysis.setAnalyzer(cameraExecutor) { image -> renderForPresentation(image, generation) }
+                current.bindToLifecycle(this, selector, cameraPreview, analysis)
                 staleHandler.removeCallbacks(staleCheck)
                 if (autoPlacement) staleHandler.postDelayed(staleCheck, 200)
-                pendingStart?.success(mapOf("available" to true))
+                pendingStart?.success(mapOf("available" to true, "front" to frontCamera))
                 pendingStart = null
             } catch (_: Exception) {
                 failStart("CAMERA_FAILED", "راه‌اندازی دوربین ممکن نشد")
@@ -615,16 +638,16 @@ class MainActivity : FlutterActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun renderForPresentation(image: ImageProxy) {
+    private fun renderForPresentation(image: ImageProxy, generation: Int) {
         var queuedFrame = false
         try {
-            if (!running || (presentation == null && !autoPlacement && !gestureEnabled)) return
+            if (!running || generation != cameraGeneration || (presentation == null && !autoPlacement && !gestureEnabled)) return
             val plane = image.planes[0]
             if (plane.pixelStride != 4 || plane.rowStride < image.width * 4) return
             val now = SystemClock.uptimeMillis()
             val infer = autoPlacement && poseTracker != null && now - lastDetectMs >= 100
             val inferGesture = gestureEnabled && gestureTracker != null &&
-                now - lastGestureDetectMs >= 180
+                now - lastGestureDetectMs >= 120
             val project = presentation != null && framePending.compareAndSet(false, true)
             if (!infer && !inferGesture && !project) return
             queuedFrame = project
@@ -644,6 +667,10 @@ class MainActivity : FlutterActivity() {
             }
             val frame = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, transform, true)
             if (frame !== raw) raw.recycle()
+            if (!running || generation != cameraGeneration) {
+                if (project) framePending.set(false)
+                return
+            }
             if (infer) {
                 lastDetectMs = now
                 try { poseTracker?.detect(frame, now) } catch (_: Exception) {
@@ -658,7 +685,7 @@ class MainActivity : FlutterActivity() {
             }
             if (project) {
                 runOnUiThread {
-                    if (running) presentation?.showFrame(frame)
+                    if (running && generation == cameraGeneration) presentation?.showFrame(frame)
                     // ImageView drops its previous bitmap after replacement; Android's
                     // rendering pipeline/GC releases it when drawing is finished.
                     framePending.set(false)
@@ -680,6 +707,7 @@ class MainActivity : FlutterActivity() {
 
     private fun stopCamera() {
         running = false
+        votingEnabled = false
         gestureEnabled = false
         gestureGeneration++
         pendingGesture?.error("STOPPED", "دوربین متوقف شد", null)
@@ -725,7 +753,7 @@ private class CustomerPresentation(context: Context, display: Display) : android
         scene.addView(camera, FrameLayout.LayoutParams(-1, -1))
         overlay = ImageView(context).apply {
             scaleType = ImageView.ScaleType.FIT_XY
-            alpha = 0.78f
+            alpha = 1f
         }
         scene.addView(overlay)
         price = android.widget.TextView(context).apply {
