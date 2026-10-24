@@ -1,4 +1,5 @@
 import 'garment_render_metadata.dart';
+import 'garment_model_metadata.dart';
 
 const garmentCategories = {
   'top': 'بالاتنه',
@@ -31,9 +32,9 @@ class Garment {
     this.collection = '',
     this.sku = '',
     this.barcode = '',
-    this.price = 0,
+    this.price,
     this.discountPrice,
-    this.stock = 0,
+    this.stock,
     this.isActive = true,
     this.isDraft = true,
     this.archived = false,
@@ -58,7 +59,8 @@ class Garment {
 
   final String id, name, category, collection, sku, barcode, processingStatus;
   final String tryOnJson, aiImportJson, audience;
-  final int localRevision, price, stock;
+  final int localRevision;
+  final int? price, stock;
   final int? discountPrice;
   final bool isActive, isDraft, archived;
   final Map<String, Object?> metadata;
@@ -71,19 +73,23 @@ class Garment {
       !isDraft &&
       isActive &&
       !archived &&
-      stock > 0 &&
+      stock != 0 &&
       photos['front'] != null &&
       photos['front_source'] != null &&
       tryOnJson.trim().isNotEmpty &&
       renderMetadataError == null;
-  int get effectivePrice => discountPrice ?? price;
+  int? get effectivePrice => discountPrice ?? price;
 
   // Garments are immutable; avoid parsing large JSON on every camera UI frame.
   late final String? renderMetadataError = _checkRenderMetadata();
 
   String? _checkRenderMetadata() {
     try {
-      GarmentRenderMetadata.parse(tryOnJson);
+      if (GarmentModelMetadata.isModel(tryOnJson)) {
+        GarmentModelMetadata.parse(tryOnJson);
+      } else {
+        GarmentRenderMetadata.parse(tryOnJson);
+      }
       return null;
     } on FormatException catch (e) {
       return e.message;
@@ -101,13 +107,13 @@ class Garment {
       'گروه لباس نامعتبر است',
     if (!isDraft && !archived && tryOnJson.trim().isEmpty)
       'برای ثبت لباس، JSON پرو زنده ضروری است',
-    if (price < 0) 'قیمت نمی‌تواند منفی باشد',
-    if (price > 999999999999) 'قیمت از سقف مجاز بیشتر است',
+    if (price != null && price! < 0) 'قیمت نمی‌تواند منفی باشد',
+    if (price != null && price! > 999999999999) 'قیمت از سقف مجاز بیشتر است',
     if (discountPrice != null &&
-        (discountPrice! < 0 || discountPrice! >= price))
+        (price == null || discountPrice! < 0 || discountPrice! >= price!))
       'قیمت تخفیف باید نامنفی و کمتر از قیمت اصلی باشد',
-    if (stock < 0) 'موجودی نمی‌تواند منفی باشد',
-    if (stock > 999999) 'موجودی از سقف مجاز بیشتر است',
+    if (stock != null && stock! < 0) 'موجودی نمی‌تواند منفی باشد',
+    if (stock != null && stock! > 999999) 'موجودی از سقف مجاز بیشتر است',
     if (measurements.values.any((v) => !v.isFinite || v <= 0 || v > 10000))
       'اندازه باید بین صفر و ۱۰۰۰۰ میلی‌متر باشد',
     if (!isDraft && !archived && photos['front_source'] == null)
@@ -125,9 +131,11 @@ class Garment {
     String? barcode,
     int? localRevision,
     int? price,
+    bool clearPrice = false,
     int? discountPrice,
     bool clearDiscount = false,
     int? stock,
+    bool clearStock = false,
     bool? isActive,
     bool? isDraft,
     bool? archived,
@@ -148,9 +156,9 @@ class Garment {
     sku: sku ?? this.sku,
     barcode: barcode ?? this.barcode,
     localRevision: localRevision ?? this.localRevision,
-    price: price ?? this.price,
+    price: clearPrice ? null : price ?? this.price,
     discountPrice: clearDiscount ? null : discountPrice ?? this.discountPrice,
-    stock: stock ?? this.stock,
+    stock: clearStock ? null : stock ?? this.stock,
     isActive: isActive ?? this.isActive,
     isDraft: isDraft ?? this.isDraft,
     archived: archived ?? this.archived,
@@ -198,9 +206,9 @@ class Garment {
     sku: j['sku'] as String,
     barcode: j['barcode'] as String,
     localRevision: j['localRevision'] as int,
-    price: j['price'] as int,
+    price: j['price'] as int?,
     discountPrice: j['discountPrice'] as int?,
-    stock: j['stock'] as int,
+    stock: j['stock'] as int?,
     isActive: j['isActive'] as bool,
     isDraft: j['isDraft'] as bool,
     archived: j['archived'] as bool,

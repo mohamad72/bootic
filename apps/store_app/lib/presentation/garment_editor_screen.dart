@@ -15,6 +15,7 @@ import '../domain/field_definition.dart';
 import '../domain/garment_ai_import.dart';
 import '../domain/garment_ai_prompt.dart';
 import '../domain/garment_render_metadata.dart';
+import '../domain/garment_model_metadata.dart';
 import '../domain/persian.dart';
 import 'common.dart';
 import 'dynamic_field.dart';
@@ -70,8 +71,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
       if (!mounted) return;
       _name.text = item.name;
       if (widget.id != null) {
-        _price.text = faDigits(item.price);
-        _stock.text = faDigits(item.stock);
+        _price.text = item.price == null ? '' : faDigits(item.price!);
+        _stock.text = item.stock == null ? '' : faDigits(item.stock!);
       }
       _discount.text = item.discountPrice == null
           ? ''
@@ -141,8 +142,8 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
     return parseWhole(value) == null ? 'عدد صحیح وارد کنید' : null;
   }
 
-  int? _wholeOrZero(String? value) {
-    if (value == null || value.trim().isEmpty) return 0;
+  int? _optionalWhole(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
     return parseWhole(value);
   }
 
@@ -165,13 +166,13 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
               return false;
             }
             if (!form.validate()) return false;
-            final price = _wholeOrZero(_price.text),
-                stock = _wholeOrZero(_stock.text);
+            final price = _optionalWhole(_price.text),
+                stock = _optionalWhole(_stock.text);
             final discount = _discount.text.trim().isEmpty
                 ? null
                 : parseWhole(_discount.text);
-            if (price == null ||
-                stock == null ||
+            if ((_price.text.trim().isNotEmpty && price == null) ||
+                (_stock.text.trim().isNotEmpty && stock == null) ||
                 (_discount.text.trim().isNotEmpty && discount == null) ||
                 _measurement(_chest.text) != null ||
                 _measurement(_length.text) != null) {
@@ -197,7 +198,9 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                   ? 'پیش‌نویس لباس'
                   : _name.text.trim(),
               price: price,
+              clearPrice: price == null,
               stock: stock,
+              clearStock: stock == null,
               discountPrice: discount,
               clearDiscount: discount == null,
               collection: _collection.text.trim(),
@@ -427,7 +430,9 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
         category: _category,
         audience: _audience,
         price: parseWhole(_price.text),
+        clearPrice: _price.text.trim().isEmpty,
         stock: parseWhole(_stock.text),
+        clearStock: _stock.text.trim().isEmpty,
         discountPrice: parseWhole(_discount.text),
         clearDiscount: _discount.text.trim().isEmpty,
         collection: _collection.text,
@@ -922,12 +927,16 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                           alignLabelWithHint: true,
                           counterText: '',
                           hintText:
-                              '{"schema_version":"bootic.garment-metadata/0.1", ...}',
+                              '{"schema_version":"bootic.garment-model/1", ...}',
                           errorMaxLines: 4,
                         ),
                         validator: (value) {
                           try {
-                            GarmentRenderMetadata.parse(value ?? '');
+                            if (GarmentModelMetadata.isModel(value ?? '')) {
+                              GarmentModelMetadata.parse(value!);
+                            } else {
+                              GarmentRenderMetadata.parse(value ?? '');
+                            }
                             return null;
                           } on FormatException catch (e) {
                             return e.message;

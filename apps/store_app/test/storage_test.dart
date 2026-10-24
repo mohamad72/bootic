@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:store_app/data/app_database.dart';
@@ -7,6 +8,75 @@ import 'package:store_app/domain/garment.dart';
 import 'package:store_app/domain/field_definition.dart';
 
 void main() {
+  test(
+    'v1 migration preserves catalog and settings and accepts actual SQL null',
+    () async {
+      final old = Garment.create(
+        id: 'old',
+        name: 'قدیمی',
+      ).copyWith(price: 500, stock: 3, localRevision: 1);
+      final db = AppDatabase(
+        NativeDatabase.memory(
+          setup: (raw) {
+            raw.execute(
+              'CREATE TABLE garment_rows (id TEXT NOT NULL PRIMARY KEY,revision INTEGER NOT NULL,name TEXT NOT NULL,search_text TEXT NOT NULL,category TEXT NOT NULL,price INTEGER NOT NULL CHECK(price>=0),stock INTEGER NOT NULL CHECK(stock>=0),archived INTEGER NOT NULL DEFAULT 0,payload TEXT NOT NULL,updated_at INTEGER NOT NULL)',
+            );
+            raw.execute(
+              'CREATE INDEX catalog_filter ON garment_rows(archived,category,updated_at)',
+            );
+            raw.execute(
+              'CREATE TABLE setting_rows (key TEXT NOT NULL PRIMARY KEY,value TEXT NOT NULL)',
+            );
+            raw.execute(
+              'CREATE TABLE schema_rows (key TEXT NOT NULL PRIMARY KEY,payload TEXT NOT NULL)',
+            );
+            raw.execute('PRAGMA user_version=1');
+            raw.execute(
+              'INSERT INTO garment_rows VALUES (?,?,?,?,?,?,?,?,?,?)',
+              [
+                old.id,
+                1,
+                old.name,
+                '',
+                old.category,
+                500,
+                3,
+                0,
+                jsonEncode(old.toJson()),
+                0,
+              ],
+            );
+            raw.execute(
+              "INSERT INTO setting_rows VALUES ('activation','preserved')",
+            );
+          },
+        ),
+      );
+      try {
+        final repo = GarmentRepositoryImpl(db);
+        var garment = (await repo.get('old'))!;
+        expect(garment.price, 500);
+        expect(garment.stock, 3);
+        expect(await repo.readSetting('activation'), 'preserved');
+        garment = await repo.save(
+          garment.copyWith(clearPrice: true, clearStock: true),
+          1,
+        );
+        final row = await db
+            .customSelect('SELECT price,stock FROM garment_rows')
+            .getSingle();
+        expect(row.data['price'], isNull);
+        expect(row.data['stock'], isNull);
+        expect((await repo.get('old'))!.stock, isNull);
+        garment = await repo.save(garment.copyWith(price: 0, stock: 0), 2);
+        expect(garment.price, 0);
+        expect(garment.stock, 0);
+      } finally {
+        await db.close();
+      }
+    },
+  );
+
   test(
     'SQLite survives reopening and stale writes cannot overwrite current records',
     () async {

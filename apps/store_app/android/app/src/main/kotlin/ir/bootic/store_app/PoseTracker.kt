@@ -37,7 +37,7 @@ internal class PoseTracker(
             .setMinTrackingConfidence(PoseGeometry.MODEL_CONFIDENCE)
             .setResultListener { result: PoseLandmarkerResult, image: MPImage ->
                 val points = result.landmarks().firstOrNull().orEmpty().map {
-                    PosePoint(it.x(), it.y(), it.visibility().orElse(0f), it.presence().orElse(0f))
+                    PosePoint(it.x(), it.y(), it.visibility().orElse(0f), it.presence().orElse(0f), it.z())
                 }
                 val raw = PoseGeometry.evaluate(points, image.width, image.height)
                 val started = SystemClock.uptimeMillis()

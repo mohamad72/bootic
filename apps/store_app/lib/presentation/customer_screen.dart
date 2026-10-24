@@ -202,7 +202,9 @@ class _CustomerScreenState extends ConsumerState<CustomerScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            '${faNumber(g.effectivePrice)} تومان',
+            g.effectivePrice == null
+                ? 'قیمت مشخص نشده'
+                : '${faNumber(g.effectivePrice!)} تومان',
             textAlign: TextAlign.center,
             style: const TextStyle(color: Color(0xffa7f3e8), fontSize: 22),
           ),

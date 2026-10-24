@@ -645,7 +645,11 @@ class MainActivity : FlutterActivity() {
             "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
             "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
             "voting" to votingEnabled,
-            "renderer" to (if (renderAsset == null) "legacy" else "metadata-mesh-v2"),
+            "renderer" to (if (renderAsset == null) "none" else if(renderAsset?.model != null) "parametric-3d-v1" else "metadata-mesh-v2"),
+            "modelKind" to (renderAsset?.model?.spec?.kind ?: "—"),
+            "materialMode" to (renderAsset?.model?.spec?.mode ?: "photo"),
+            "modelTriangles" to (renderAsset?.model?.faces?.size ?: 0),
+            "shoulderDepth" to (observation?.let { o -> if(o.points.size>12) (o.points[11].z-o.points[12].z)*o.imageWidth else 0f } ?: 0f),
             "garmentWidth" to (garment?.width ?: 0), "garmentHeight" to (garment?.height ?: 0),
         ))
     }
@@ -693,17 +697,19 @@ class MainActivity : FlutterActivity() {
     private fun setGarment(call: MethodCall, result: MethodChannel.Result) {
         val path = call.argument<String>("path")
         val metadata = call.argument<Map<String, Any?>>("renderMetadata")
+        val model = call.argument<Map<String, Any?>>("model")
         val generation = ++garmentGeneration
         garment = null
         renderAsset = null
         phoneGarment?.asset = null
         presentation?.setRenderAsset(null)
         presentation?.setGarment(null)
-        if (path == null) { result.success(null); return }
+        if (path == null && model == null) { result.success(null); return }
         cameraExecutor.execute {
             try {
-                val file = garmentFile(path)
-                val asset = GarmentRenderAsset.load(file, GarmentRenderSpec.fromMap(requireNotNull(metadata)))
+                val file = path?.let { garmentFile(it) }
+                val asset = if(model != null) GarmentRenderAsset.model(model,file) else
+                    GarmentRenderAsset.load(requireNotNull(file), GarmentRenderSpec.fromMap(requireNotNull(metadata)))
                 val decoded = asset.masked
                 runOnUiThread {
                     if (generation != garmentGeneration) {

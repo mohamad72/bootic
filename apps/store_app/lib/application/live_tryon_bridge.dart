@@ -129,9 +129,11 @@ class LiveTryonBridge {
   Future<void> setGarment(
     String? path, {
     Map<String, Object?>? renderMetadata,
+    Map<String, Object?>? model,
   }) async => _channel.invokeMethod<void>('setGarment', {
     'path': path,
     'renderMetadata': renderMetadata,
+    'model': model,
   });
 
   Future<void> setPrice(String text) async =>

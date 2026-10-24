@@ -127,7 +127,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  '${faNumber(garment.effectivePrice)} تومان',
+                                  garment.effectivePrice == null
+                                      ? 'قیمت مشخص نشده'
+                                      : '${faNumber(garment.effectivePrice!)} تومان',
                                 ),
                                 Text(_status(garment)),
                               ],
@@ -150,6 +152,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     if (garment.isDraft) return 'پیش‌نویس';
     if (!garment.isActive || garment.archived) return 'غیرفعال';
     if (garment.stock == 0) return 'ناموجود';
-    return '${faNumber(garment.stock)} عدد موجود';
+    return garment.stock == null
+        ? 'موجودی مشخص نشده'
+        : '${faNumber(garment.stock!)} عدد موجود';
   }
 }

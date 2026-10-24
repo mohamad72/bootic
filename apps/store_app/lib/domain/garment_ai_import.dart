@@ -2,12 +2,13 @@ import 'dart:convert';
 import 'field_definition.dart';
 import 'garment.dart';
 import 'garment_render_metadata.dart';
+import 'garment_model_metadata.dart';
 
 /// Validates the entire response before exposing any form changes.
 /// null means unknown: it never clears an operator's existing value.
 class GarmentAiImport {
   GarmentAiImport._(this.sourceJson, this.values, this.renderJson);
-  static const schema = 'bootic.garment-import/1';
+  static const schema = 'bootic.garment-import/2';
   final String sourceJson, renderJson;
   final Map<String, dynamic> values;
 
@@ -53,7 +54,8 @@ class GarmentAiImport {
 
     final root = object(decoded, 'پاسخ');
     keys(root, {'schema_version', 'photo_id', 'garment', 'try_on'}, 'پاسخ');
-    if (root['schema_version'] != schema)
+    if (root['schema_version'] != schema &&
+        root['schema_version'] != 'bootic.garment-import/1')
       throw const FormatException(
         'نسخهٔ پاسخ باید bootic.garment-import/1 باشد',
       );
@@ -136,12 +138,20 @@ class GarmentAiImport {
     }
     final render = object(root['try_on'], 'try_on');
     final renderJson = jsonEncode(render);
-    GarmentRenderMetadata.parse(renderJson);
-    final source = object(render['source'], 'try_on.source');
-    if (source['width_px'] != width || source['height_px'] != height)
-      throw const FormatException(
-        'ابعاد JSON با عکس مرجع فعلی یکی نیست؛ ابعاد درج‌شده در پرامپت را استفاده کنید',
-      );
+    final model = GarmentModelMetadata.isModel(renderJson)
+        ? GarmentModelMetadata.parse(renderJson)
+        : null;
+    if (root['schema_version'] == schema && model == null) {
+      throw const FormatException('پرامپت جدید به مدل سه‌بعدی نیاز دارد');
+    }
+    if (model == null) GarmentRenderMetadata.parse(renderJson);
+    final sourceRender = model == null ? render : model.data['source_metadata'];
+    if (sourceRender != null) {
+      final source = object((sourceRender as Map)['source'], 'try_on.source');
+      if (source['width_px'] != width || source['height_px'] != height) {
+        throw const FormatException('ابعاد هندسه با عکس مرجع هماهنگ نیست');
+      }
+    }
     return GarmentAiImport._(jsonEncode(root), data, renderJson);
   }
 
@@ -174,6 +184,11 @@ class GarmentAiImport {
       // AI fills a reviewable draft; only the operator publishes it.
       isDraft: true,
     );
+    if (GarmentModelMetadata.isModel(renderJson) &&
+        GarmentModelMetadata.parse(renderJson).data['kind'] !=
+            result.category) {
+      throw const FormatException('نوع مدل سه‌بعدی با دستهٔ لباس هماهنگ نیست');
+    }
     final errors = result.validate();
     if (errors.isNotEmpty) throw FormatException(errors.join('\n'));
     return result;

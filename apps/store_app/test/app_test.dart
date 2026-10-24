@@ -99,7 +99,7 @@ void main() {
       final saved = await repo.list();
       expect(saved.single.name, 'مانتو کتان');
       expect(saved.single.price, 890000);
-      expect(saved.single.stock, 0);
+      expect(saved.single.stock, isNull);
       expect(saved.single.isDraft, isTrue);
       await tester.tap(find.byTooltip('قفل برنامه'));
       await tester.pumpAndSettle();

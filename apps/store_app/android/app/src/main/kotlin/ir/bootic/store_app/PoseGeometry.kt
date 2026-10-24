@@ -5,8 +5,8 @@ import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
 
-internal data class PosePoint(val x: Float, val y: Float, val visibility: Float, val presence: Float) {
-    val finite: Boolean get() = x.isFinite() && y.isFinite() && visibility.isFinite() && presence.isFinite()
+internal data class PosePoint(val x: Float, val y: Float, val visibility: Float, val presence: Float, val z: Float = 0f) {
+    val finite: Boolean get() = z.isFinite() && x.isFinite() && y.isFinite() && visibility.isFinite() && presence.isFinite()
 }
 
 internal data class TorsoBox(

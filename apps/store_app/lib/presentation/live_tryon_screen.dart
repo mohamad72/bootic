@@ -9,6 +9,7 @@ import '../app/providers.dart';
 import '../application/live_tryon_bridge.dart';
 import '../domain/garment.dart';
 import '../domain/garment_render_metadata.dart';
+import '../domain/garment_model_metadata.dart';
 import '../domain/persian.dart';
 import '../domain/pose_diagnostics.dart';
 import 'tryon_debug_overlay.dart';
@@ -152,19 +153,35 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     final session = _session;
     if (mounted) setState(() => _garmentReady = false);
     await _bridge.setVotingEnabled(false);
-    final render = GarmentRenderMetadata.parse(garment?.tryOnJson ?? '');
-    final photo = _photoPath(garment);
-    if (garment != null && (render == null || photo == null)) {
+    final model = GarmentModelMetadata.isModel(garment?.tryOnJson ?? '')
+        ? GarmentModelMetadata.parse(garment!.tryOnJson)
+        : null;
+    final render = model == null
+        ? GarmentRenderMetadata.parse(garment?.tryOnJson ?? '')
+        : null;
+    final needsPhoto =
+        model == null || model.data['material']['mode'] == 'source';
+    final photo = needsPhoto ? _photoPath(garment) : null;
+    if (garment != null &&
+        ((render == null && model == null) ||
+            (photo == null &&
+                model?.data['material']['mode'] != 'procedural'))) {
       await _bridge.setGarment(null);
       throw StateError(
         'JSON معتبر یا عکس اصلی این لباس موجود نیست؛ مشخصات و عکس روبرو را در فرم لباس تکمیل کنید.',
       );
     }
     if (!mounted || session != _session || !_running) return;
-    await _bridge.setGarment(photo, renderMetadata: render?.toNativeMap());
+    await _bridge.setGarment(
+      photo,
+      renderMetadata: render?.toNativeMap(),
+      model: model?.toNativeMap(),
+    );
     await _bridge.setGarmentGhost(_debugEnabled && _debugGhost);
     await _bridge.setPrice(
-      garment == null ? '' : '${faNumber(garment.effectivePrice)} تومان',
+      garment?.effectivePrice == null
+          ? ''
+          : '${faNumber(garment!.effectivePrice!)} تومان',
     );
     if (!mounted || session != _session || !_running) return;
     setState(() => _garmentReady = garment != null);
@@ -541,7 +558,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                   : !_personFound
                   ? 'انتظار بدن'
                   : !_garmentReady
-                  ? 'آماده‌سازی عکس'
+                  ? 'آماده‌سازی مدل لباس'
                   : 'لباس آماده',
               ghost: _debugGhost,
               expanded: _debugDetails,
@@ -570,11 +587,16 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
             selectedIcon: const Icon(Icons.bug_report),
           ),
         ),
-        if (visible && selected != null)
+        if (visible && selected != null && selected.effectivePrice != null)
           Positioned(
             top: 16,
             right: 16,
-            child: _badge('${faNumber(selected.effectivePrice)} تومان', 18),
+            child: _badge(
+              selected.effectivePrice == null
+                  ? 'قیمت مشخص نشده'
+                  : '${faNumber(selected.effectivePrice!)} تومان',
+              18,
+            ),
           ),
         Center(
           child: AnimatedSwitcher(

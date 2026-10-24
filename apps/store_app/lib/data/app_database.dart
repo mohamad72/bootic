@@ -10,9 +10,11 @@ class GarmentRows extends Table {
   TextColumn get category => text()();
   // Drift generates the runtime getter; this declaration describes a SQL check.
   // ignore: recursive_getters
-  IntColumn get price => integer().check(price.isBiggerOrEqualValue(0))();
+  IntColumn get price =>
+      integer().nullable().check(price.isBiggerOrEqualValue(0))();
   // ignore: recursive_getters
-  IntColumn get stock => integer().check(stock.isBiggerOrEqualValue(0))();
+  IntColumn get stock =>
+      integer().nullable().check(stock.isBiggerOrEqualValue(0))();
   BoolColumn get archived => boolean().withDefault(const Constant(false))();
   TextColumn get payload => text()();
   DateTimeColumn get updatedAt => dateTime()();
@@ -38,7 +40,7 @@ class SchemaRows extends Table {
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async {
@@ -48,9 +50,12 @@ class AppDatabase extends _$AppDatabase {
       );
     },
     onUpgrade: (m, from, to) async {
-      throw StateError(
-        'ارتقای این نسخه پایگاه داده پشتیبانی نمی‌شود؛ داده‌ها حفظ شدند',
-      );
+      if (from == 1) {
+        await m.alterTable(TableMigration(garmentRows));
+        await customStatement(
+          'CREATE INDEX IF NOT EXISTS catalog_filter ON garment_rows(archived, category, updated_at)',
+        );
+      }
     },
     beforeOpen: (details) async {
       if (details.versionBefore != null &&

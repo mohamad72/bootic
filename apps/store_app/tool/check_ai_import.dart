@@ -45,7 +45,7 @@ int runAiImportChecks() {
     ),
   ];
   Map<String, dynamic> payload() => {
-    'schema_version': GarmentAiImport.schema,
+    'schema_version': 'bootic.garment-import/1',
     'photo_id': 'reference.png',
     'garment': <String, dynamic>{
       'name': 'تیشرت راه‌راه',
@@ -296,14 +296,14 @@ int runAiImportChecks() {
   );
   check(
     prompt.contains('left_sleeve_hem_center') &&
-        prompt.contains('neck binding') &&
+        prompt.contains('source_metadata') &&
         prompt.contains(GarmentAiImport.schema),
     'Prompt omitted render/parser contract',
   );
   check(
     prompt.contains('58000') &&
-        prompt.contains('unknown') &&
-        prompt.contains('WHOLE TOMAN'),
+        prompt.contains('Unknown') &&
+        prompt.contains('TOMAN'),
     'Prompt omitted manual context and units',
   );
   print('AI form import: $checks checks passed');

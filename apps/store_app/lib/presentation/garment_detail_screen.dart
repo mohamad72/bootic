@@ -129,12 +129,14 @@ class _GarmentDetailScreenState extends ConsumerState<GarmentDetailScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              '${faNumber(g.effectivePrice)} تومان',
+              g.effectivePrice == null
+                  ? 'قیمت مشخص نشده'
+                  : '${faNumber(g.effectivePrice!)} تومان',
               style: const TextStyle(fontSize: 24, color: Color(0xff6554c0)),
             ),
             if (g.discountPrice != null)
               Text(
-                '${faNumber(g.price)} تومان',
+                '${faNumber(g.price!)} تومان',
                 style: const TextStyle(decoration: TextDecoration.lineThrough),
               ),
             const SizedBox(height: 16),
@@ -151,7 +153,13 @@ class _GarmentDetailScreenState extends ConsumerState<GarmentDetailScreen> {
                         : 'ثبت‌شده در کاتالوگ',
                   ),
                 ),
-                Chip(label: Text('${faNumber(g.stock)} عدد موجود')),
+                Chip(
+                  label: Text(
+                    g.stock == null
+                        ? 'موجودی مشخص نشده'
+                        : '${faNumber(g.stock!)} عدد موجود',
+                  ),
+                ),
                 if (garmentAudiences[g.audience] != null)
                   Chip(label: Text(garmentAudiences[g.audience]!)),
                 if (!g.isDraft &&

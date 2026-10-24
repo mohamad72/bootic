@@ -65,20 +65,20 @@ class $GarmentRowsTable extends GarmentRows
   late final GeneratedColumn<int> price = GeneratedColumn<int>(
     'price',
     aliasedName,
-    false,
+    true,
     check: () => ComparableExpr(price).isBiggerOrEqualValue(0),
     type: DriftSqlType.int,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _stockMeta = const VerificationMeta('stock');
   @override
   late final GeneratedColumn<int> stock = GeneratedColumn<int>(
     'stock',
     aliasedName,
-    false,
+    true,
     check: () => ComparableExpr(stock).isBiggerOrEqualValue(0),
     type: DriftSqlType.int,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _archivedMeta = const VerificationMeta(
     'archived',
@@ -184,16 +184,12 @@ class $GarmentRowsTable extends GarmentRows
         _priceMeta,
         price.isAcceptableOrUnknown(data['price']!, _priceMeta),
       );
-    } else if (isInserting) {
-      context.missing(_priceMeta);
     }
     if (data.containsKey('stock')) {
       context.handle(
         _stockMeta,
         stock.isAcceptableOrUnknown(data['stock']!, _stockMeta),
       );
-    } else if (isInserting) {
-      context.missing(_stockMeta);
     }
     if (data.containsKey('archived')) {
       context.handle(
@@ -249,11 +245,11 @@ class $GarmentRowsTable extends GarmentRows
       price: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}price'],
-      )!,
+      ),
       stock: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}stock'],
-      )!,
+      ),
       archived: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}archived'],
@@ -281,8 +277,8 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
   final String name;
   final String searchText;
   final String category;
-  final int price;
-  final int stock;
+  final int? price;
+  final int? stock;
   final bool archived;
   final String payload;
   final DateTime updatedAt;
@@ -292,8 +288,8 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
     required this.name,
     required this.searchText,
     required this.category,
-    required this.price,
-    required this.stock,
+    this.price,
+    this.stock,
     required this.archived,
     required this.payload,
     required this.updatedAt,
@@ -306,8 +302,12 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
     map['name'] = Variable<String>(name);
     map['search_text'] = Variable<String>(searchText);
     map['category'] = Variable<String>(category);
-    map['price'] = Variable<int>(price);
-    map['stock'] = Variable<int>(stock);
+    if (!nullToAbsent || price != null) {
+      map['price'] = Variable<int>(price);
+    }
+    if (!nullToAbsent || stock != null) {
+      map['stock'] = Variable<int>(stock);
+    }
     map['archived'] = Variable<bool>(archived);
     map['payload'] = Variable<String>(payload);
     map['updated_at'] = Variable<DateTime>(updatedAt);
@@ -321,8 +321,12 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
       name: Value(name),
       searchText: Value(searchText),
       category: Value(category),
-      price: Value(price),
-      stock: Value(stock),
+      price: price == null && nullToAbsent
+          ? const Value.absent()
+          : Value(price),
+      stock: stock == null && nullToAbsent
+          ? const Value.absent()
+          : Value(stock),
       archived: Value(archived),
       payload: Value(payload),
       updatedAt: Value(updatedAt),
@@ -340,8 +344,8 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
       name: serializer.fromJson<String>(json['name']),
       searchText: serializer.fromJson<String>(json['searchText']),
       category: serializer.fromJson<String>(json['category']),
-      price: serializer.fromJson<int>(json['price']),
-      stock: serializer.fromJson<int>(json['stock']),
+      price: serializer.fromJson<int?>(json['price']),
+      stock: serializer.fromJson<int?>(json['stock']),
       archived: serializer.fromJson<bool>(json['archived']),
       payload: serializer.fromJson<String>(json['payload']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
@@ -356,8 +360,8 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
       'name': serializer.toJson<String>(name),
       'searchText': serializer.toJson<String>(searchText),
       'category': serializer.toJson<String>(category),
-      'price': serializer.toJson<int>(price),
-      'stock': serializer.toJson<int>(stock),
+      'price': serializer.toJson<int?>(price),
+      'stock': serializer.toJson<int?>(stock),
       'archived': serializer.toJson<bool>(archived),
       'payload': serializer.toJson<String>(payload),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
@@ -370,8 +374,8 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
     String? name,
     String? searchText,
     String? category,
-    int? price,
-    int? stock,
+    Value<int?> price = const Value.absent(),
+    Value<int?> stock = const Value.absent(),
     bool? archived,
     String? payload,
     DateTime? updatedAt,
@@ -381,8 +385,8 @@ class GarmentRow extends DataClass implements Insertable<GarmentRow> {
     name: name ?? this.name,
     searchText: searchText ?? this.searchText,
     category: category ?? this.category,
-    price: price ?? this.price,
-    stock: stock ?? this.stock,
+    price: price.present ? price.value : this.price,
+    stock: stock.present ? stock.value : this.stock,
     archived: archived ?? this.archived,
     payload: payload ?? this.payload,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -456,8 +460,8 @@ class GarmentRowsCompanion extends UpdateCompanion<GarmentRow> {
   final Value<String> name;
   final Value<String> searchText;
   final Value<String> category;
-  final Value<int> price;
-  final Value<int> stock;
+  final Value<int?> price;
+  final Value<int?> stock;
   final Value<bool> archived;
   final Value<String> payload;
   final Value<DateTime> updatedAt;
@@ -481,8 +485,8 @@ class GarmentRowsCompanion extends UpdateCompanion<GarmentRow> {
     required String name,
     required String searchText,
     required String category,
-    required int price,
-    required int stock,
+    this.price = const Value.absent(),
+    this.stock = const Value.absent(),
     this.archived = const Value.absent(),
     required String payload,
     required DateTime updatedAt,
@@ -492,8 +496,6 @@ class GarmentRowsCompanion extends UpdateCompanion<GarmentRow> {
        name = Value(name),
        searchText = Value(searchText),
        category = Value(category),
-       price = Value(price),
-       stock = Value(stock),
        payload = Value(payload),
        updatedAt = Value(updatedAt);
   static Insertable<GarmentRow> custom({
@@ -530,8 +532,8 @@ class GarmentRowsCompanion extends UpdateCompanion<GarmentRow> {
     Value<String>? name,
     Value<String>? searchText,
     Value<String>? category,
-    Value<int>? price,
-    Value<int>? stock,
+    Value<int?>? price,
+    Value<int?>? stock,
     Value<bool>? archived,
     Value<String>? payload,
     Value<DateTime>? updatedAt,
@@ -1052,8 +1054,8 @@ typedef $$GarmentRowsTableCreateCompanionBuilder =
       required String name,
       required String searchText,
       required String category,
-      required int price,
-      required int stock,
+      Value<int?> price,
+      Value<int?> stock,
       Value<bool> archived,
       required String payload,
       required DateTime updatedAt,
@@ -1066,8 +1068,8 @@ typedef $$GarmentRowsTableUpdateCompanionBuilder =
       Value<String> name,
       Value<String> searchText,
       Value<String> category,
-      Value<int> price,
-      Value<int> stock,
+      Value<int?> price,
+      Value<int?> stock,
       Value<bool> archived,
       Value<String> payload,
       Value<DateTime> updatedAt,
@@ -1272,8 +1274,8 @@ class $$GarmentRowsTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<String> searchText = const Value.absent(),
                 Value<String> category = const Value.absent(),
-                Value<int> price = const Value.absent(),
-                Value<int> stock = const Value.absent(),
+                Value<int?> price = const Value.absent(),
+                Value<int?> stock = const Value.absent(),
                 Value<bool> archived = const Value.absent(),
                 Value<String> payload = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
@@ -1298,8 +1300,8 @@ class $$GarmentRowsTableTableManager
                 required String name,
                 required String searchText,
                 required String category,
-                required int price,
-                required int stock,
+                Value<int?> price = const Value.absent(),
+                Value<int?> stock = const Value.absent(),
                 Value<bool> archived = const Value.absent(),
                 required String payload,
                 required DateTime updatedAt,
