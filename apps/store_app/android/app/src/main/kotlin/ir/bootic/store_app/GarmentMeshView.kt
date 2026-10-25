@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.view.View
-import android.os.SystemClock
 import kotlin.math.max
 import kotlin.math.hypot
 
@@ -13,18 +12,14 @@ import kotlin.math.hypot
  * sleeve tubes, generated collar or destructive neck rectangle. */
 internal class GarmentMeshView(context: Context) : View(context) {
     var asset: GarmentRenderAsset? = null
-        set(value) { if(field !== value) { motion.reset();cachedAsset=null };field=value;invalidate() }
+        set(value) { field=value;invalidate() }
     var pose: PoseObservation? = null
-        set(value) { if(value?.box==null || field?.imageWidth!=value?.imageWidth || field?.imageHeight!=value?.imageHeight)motion.reset();field=value;invalidate() }
+        set(value) { field=value;invalidate() }
     var mirrorTexture = false
-        set(value) { if(field!=value)motion.reset();field=value;invalidate() }
+        set(value) { field=value;invalidate() }
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val motion=ClothMotion()
-    private var cachedAsset:GarmentRenderAsset?=null
-    private val columns=48
-    private val rows=64
-    private val sources=ArrayList<GPoint>()
-    private val vertices=FloatArray((columns+1)*(rows+1)*2)
+    val deformationScale:Float get()=asset?.photoMesh?.deformationScale ?: 1f
+    private var vertices=FloatArray(0)
     init { isClickable=false;isFocusable=false;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
 
     override fun onDraw(canvas:Canvas) {
@@ -33,19 +28,14 @@ internal class GarmentMeshView(context: Context) : View(context) {
         val pose=pose ?: return
         val spec=asset.spec ?: return
         if(pose.box==null || width<=0 || height<=0)return
-        if(cachedAsset !== asset) {
-            cachedAsset=asset;sources.clear()
-            for(y in 0..rows)for(x in 0..columns)
-                sources.add(GPoint(spec.width*x/columns,spec.height*y/rows))
-        }
-        val warp=GarmentWarp(spec,pose.points,pose.imageWidth,pose.imageHeight,mirrorTexture,pose.bodyEdges)
+        val mesh=asset.photoMesh ?: return
+        val warp=GarmentWarp(spec,pose.points,pose.imageWidth,pose.imageHeight,mirrorTexture,pose.bodyEdges,mesh.surface)
         val scale=max(width.toFloat()/pose.imageWidth,height.toFloat()/pose.imageHeight)
         val ox=(width-pose.imageWidth*scale)/2;val oy=(height-pose.imageHeight*scale)/2
-        val center=warp.torso(spec.hem)
-        val lag=motion.update(center,pose.shoulderPx,SystemClock.uptimeMillis()/1000.0)
-        for((i,source)in sources.withIndex()) {
-            val p=warp.surface(source,lag)
-            vertices[i*2]=ox+p.x*scale;vertices[i*2+1]=oy+p.y*scale
+        val projected=mesh.project(warp,pose,mirrorTexture)
+        if(vertices.size!=projected.size)vertices=FloatArray(projected.size)
+        for(i in mesh.samples.indices) {
+            vertices[i*2]=ox+projected[i*2]*scale;vertices[i*2+1]=oy+projected[i*2+1]*scale
         }
         canvas.save();canvas.clipRect(0,0,width,height)
         val allowed=Path().apply { addRect(0f,0f,width.toFloat(),height.toFloat(),Path.Direction.CW) }
@@ -73,8 +63,7 @@ internal class GarmentMeshView(context: Context) : View(context) {
             allowed.op(mask,Path.Op.DIFFERENCE)
         }
         canvas.clipPath(allowed)
-        canvas.drawBitmapMesh(asset.masked,columns,rows,vertices,0,null,0,paint)
+        canvas.drawBitmapMesh(asset.masked,mesh.columns,mesh.rows,vertices,0,null,0,paint)
         canvas.restore()
-        if(lag.length>.005f)postInvalidateOnAnimation()
     }
 }

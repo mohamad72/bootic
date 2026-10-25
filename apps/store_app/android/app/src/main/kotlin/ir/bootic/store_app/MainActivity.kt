@@ -623,6 +623,14 @@ class MainActivity : FlutterActivity() {
             "lift11" to (edges?.lift11?.toDouble() ?: 0.0), "lift12" to (edges?.lift12?.toDouble() ?: 0.0),
             "fit11" to anchor(11), "fit12" to anchor(12),
             "bodyContour" to edges?.contour?.map { listOf(it.x.toDouble(), it.y.toDouble()) }.orEmpty(),
+            "fitSections" to edges?.sections?.map { row ->
+                fun endpoint(distance:Float,sign:Float):List<Double> {
+                    val q=row.center+row.normal*(distance*sign)
+                    return listOf(q.x.toDouble()/observation!!.imageWidth,q.y.toDouble()/observation.imageHeight)
+                }
+                mapOf("part" to row.part,"negative" to row.negative?.let { endpoint(it,-1f) },
+                    "positive" to row.positive?.let { endpoint(it,1f) })
+            }.orEmpty(),
             "garmentRendered" to (renderAsset != null && poseVisible && !sceneEffect.blocksGarment),
             "reason" to (if (poseFailure.isNotEmpty()) poseFailure else observation?.reason ?: "waiting"),
             "points" to observation?.points?.map { point -> mapOf(
@@ -645,7 +653,8 @@ class MainActivity : FlutterActivity() {
             "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
             "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
             "voting" to votingEnabled,
-            "renderer" to (if (renderAsset == null) "none" else if(renderAsset?.model != null) "parametric-3d-v1" else "photo-cloth-v1"),
+            "renderer" to (if (renderAsset == null) "none" else if(renderAsset?.model != null) "parametric-3d-v1" else "photo-surface-v2"),
+            "deformationScale" to (phoneGarment?.deformationScale?.toDouble() ?: 1.0),
             "modelKind" to (renderAsset?.model?.spec?.kind ?: "—"),
             "materialMode" to (renderAsset?.model?.spec?.mode ?: "photo"),
             "modelTriangles" to (if(renderAsset != null)48*64*2 else 0),

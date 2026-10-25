@@ -14,33 +14,8 @@ class PhotoClothTest {
         assertTrue((a-b).length<.1f)
         assertTrue((warp.surface(sleeve.hem)-warp.torso(sleeve.hem)).length>5f)
     }
-    @Test fun raisedArmLiftsUnderarmClothWithoutMovingShoulder() {
-        val down=points();down[14]=PosePoint(.2f,.55f,1f,1f)
-        val up=points();up[14]=PosePoint(.1f,.15f,1f,1f)
-        val a=GarmentWarp(spec,down,480,640,false)
-        val b=GarmentWarp(spec,up,480,640,false)
-        assertTrue(b.surface(sleeve.armpit).y<a.surface(sleeve.armpit).y)
-        assertEquals(b.torso(spec.leftShoulder),b.surface(spec.leftShoulder))
-    }
-    @Test fun collarAndShouldersStayAttachedWithMovingHem() {
-        val warp=GarmentWarp(spec,points(),480,640,false)
-        assertEquals(warp.torso(spec.leftShoulder),warp.surface(spec.leftShoulder,GPoint(10f,5f)))
-        assertEquals(warp.torso(spec.rightShoulder),warp.surface(spec.rightShoulder,GPoint(10f,5f)))
-        val hem=warp.surface(spec.hem,GPoint(10f,5f))-warp.surface(spec.hem)
-        assertEquals(10f,hem.x,.001f)
-    }
-    @Test fun motionResetsOnTrackingGapAndSettlesAtRest() {
-        val motion=ClothMotion()
-        motion.update(GPoint(0f,0f),200f,1.0)
-        val lag=motion.update(GPoint(20f,0f),200f,1.033)
-        assertTrue(lag.x<0f);assertTrue(lag.length<=6.01f)
-        var end=lag
-        repeat(200){end=motion.update(GPoint(20f,0f),200f,1.066+it*.016)}
-        assertTrue(end.length<.01f)
-        assertEquals(GPoint(0f,0f),motion.update(GPoint(500f,0f),200f,10.0))
-    }
     @Test fun longSleeveFollowsWristPastElbow() {
-        val long=sleeve.copy(hem=GPoint(0f,1300f))
+        val long=sleeve.copy(hem=GPoint(0f,1300f),polygon=listOf(sleeve.shoulder,sleeve.armpit,GPoint(0f,1300f)))
         val p=points();p[14]=PosePoint(.3f,.4f,1f,1f);p[16]=PosePoint(.2f,.7f,1f,1f)
         val first=GarmentWarp(spec.copy(sleeves=listOf(long)),p.toList(),480,640,false).surface(long.hem)
         p[16]=PosePoint(.05f,.42f,1f,1f)

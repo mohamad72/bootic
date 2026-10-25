@@ -86,7 +86,7 @@ void main() {
         isEmpty,
       );
       final stockField = tester
-          .widgetList<TextFormField>(find.byType(TextFormField))
+          .widgetList<TextField>(find.byType(TextField))
           .firstWhere((field) => field.decoration?.labelText == 'موجودی');
       expect(stockField.controller!.text, isEmpty);
       await tester.enterText(

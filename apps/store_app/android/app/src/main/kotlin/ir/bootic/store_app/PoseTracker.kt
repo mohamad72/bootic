@@ -20,6 +20,7 @@ internal class PoseTracker(
 ) {
     private val landmarker: PoseLandmarker
     @Volatile var debugEdges = false
+    private val edgeFilter=BodyEdgeFilter()
 
     init {
         val options = PoseLandmarker.PoseLandmarkerOptions.builder()
@@ -52,7 +53,8 @@ internal class PoseTracker(
                         }, includeContour=debugEdges)
                     }
                 } catch (_: Exception) { BodyEdges(status="mask_error") }
-                onResult(raw.copy(bodyEdges=edges, edgeMs=SystemClock.uptimeMillis()-started), result.timestampMs())
+                val filtered=edgeFilter.update(raw,edges,result.timestampMs())
+                onResult(raw.copy(bodyEdges=filtered, edgeMs=SystemClock.uptimeMillis()-started), result.timestampMs())
             }
             .setErrorListener { _: RuntimeException -> onError() }
             .build()

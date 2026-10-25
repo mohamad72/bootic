@@ -5,13 +5,59 @@ import org.junit.Test
 
 class BodyEdgeFitTest {
     private fun pose(width: Int = 400, height: Int = 600): PoseObservation {
-        val p = MutableList(33) { PosePoint(.5f, .5f, 1f, 1f) }
+        // Unspecified arms are unknown, not fictitious visible joints at chest centre.
+        val p = MutableList(33) { PosePoint(.5f, .5f, 0f, 0f) }
         p[11] = PosePoint(.3f, .3f, 1f, 1f); p[12] = PosePoint(.7f, .3f, 1f, 1f)
         p[23] = PosePoint(.35f, .75f, 1f, 1f); p[24] = PosePoint(.65f, .75f, 1f, 1f)
         return PoseGeometry.evaluate(p, width, height)
     }
     private fun mask(value: (Float, Float) -> Float) = BodyMask(200, 300) { x, y -> value((x+.5f)/200, (y+.5f)/300) }
     private fun silhouette() = mask { x,y -> if (x in .2f.. .8f && y in .24f.. .9f) 1f else 0f }
+    @Test fun torsoCrossSectionsFindBothSidesAndRejectFlatMasks() {
+        val fit=BodyEdgeFit.refine(pose(),silhouette())
+        val rows=fit.sections.filter { it.part==0 }
+        assertEquals(3,rows.size)
+        for(row in rows) {
+            assertEquals(120f,row.negative!!,4f)
+            assertEquals(120f,row.positive!!,4f)
+        }
+        for(value in listOf(0f,.5f,1f,Float.NaN)) assertTrue(BodyEdgeFit.refine(pose(),mask { _,_->value }).sections.isEmpty())
+    }
+    @Test fun armCrossSectionsStayLocalAndSkipHiddenArms() {
+        val p=pose();val points=p.points.toMutableList()
+        points[11]=points[11].copy(x=.25f);points[13]=PosePoint(.1f,.3f,1f,1f)
+        val m=mask { x,y -> if(x in .05f.. .3f && y in .26f.. .34f || x in .3f.. .8f && y in .24f.. .9f)1f else 0f }
+        val rows=BodyEdgeFit.refine(p.copy(points=points),m).sections.filter { it.part==11 }
+        assertEquals(2,rows.size)
+        for(row in rows)assertEquals(24f,row.positive!!,4f)
+        points[13]=points[13].copy(visibility=.1f)
+        assertTrue(BodyEdgeFit.refine(p.copy(points=points),m).sections.none { it.part==11 })
+    }
+    @Test fun filterSmoothsCorrectionsInBodyCoordinatesAndClearsOnLoss() {
+        val p=pose(); val filter=BodyEdgeFilter()
+        val first=BodySection(0,.5f,GPoint(200f,300f),GPoint(1f,0f),100f,100f)
+        filter.update(p,BodyEdges(sections=listOf(first)),1000)
+        val moved=first.copy(center=GPoint(230f,300f),positive=116f)
+        val result=filter.update(p,BodyEdges(sections=listOf(moved)),1033).sections.single()
+        assertEquals(230f,result.center.x,0f)
+        assertTrue(result.positive!! in 100.1f..115.9f)
+        assertTrue(filter.update(p,BodyEdges(),1066).sections.isEmpty())
+        assertEquals(116f,filter.update(p,BodyEdges(sections=listOf(moved)),1099).sections.single().positive!!,0f)
+    }
+    @Test fun thickTouchingUpperArmAndForearmAreNotTorsoBoundaryEvidence() {
+        for(forearm in listOf(false,true)) {
+            val p=pose();val points=p.points.toMutableList()
+            points[13]=PosePoint(.25f,.6f,1f,1f)
+            points[15]=PosePoint(.23f,.8f,1f,1f)
+            val a=if(forearm)GPoint(100f,360f) else GPoint(120f,180f)
+            val b=if(forearm)GPoint(92f,480f) else GPoint(100f,360f)
+            val m=mask { x,y -> if(x in .3f.. .7f && y in .24f.. .9f || PhotoSurface.distanceToSegment(GPoint(x*400,y*600),a,b)<30f)1f else 0f }
+            val rows=BodyEdgeFit.refine(p.copy(points=points),m).sections.filter { it.part==0 }
+            val row=rows.find { it.fraction==if(forearm).75f else .5f }!!
+            assertNull("touching arm must not widen torso",row.negative)
+            assertNotNull(row.positive)
+        }
+    }
     @Test fun shoulderSeamFindsSurfaceInsteadOfJointCentre() {
         val fit = BodyEdgeFit.refine(pose(), silhouette())
         assertEquals(.24f, fit.shoulder11!!.y/600, .008f)

@@ -17,6 +17,7 @@ internal data class GarmentRenderSpec(
     val outer: List<GPoint>, val holes: List<List<GPoint>>,
     val leftShoulder: GPoint, val rightShoulder: GPoint, val hem: GPoint,
     val sleeves: List<SleeveSpec>, val mirrorTexture: Boolean,
+    val torsoPolygon: List<GPoint> = emptyList(),
 ) {
     companion object {
         fun fromMap(map: Map<*, *>): GarmentRenderSpec {
@@ -44,7 +45,8 @@ internal data class GarmentRenderSpec(
                 SleeveSpec(side, polygon(s["polygon"]), point(s["shoulder"]), point(s["armpit"]), point(s["hem"]))
             }
             val holes = (map["holes"] as List<*>).also { require(it.size <= 16) }.map(::polygon)
-            return GarmentRenderSpec(width, height, polygon(map["outer"]), holes, left, right, hem, sleeves, map["mirrorTexture"] == true)
+            return GarmentRenderSpec(width, height, polygon(map["outer"]), holes, left, right, hem, sleeves, map["mirrorTexture"] == true,
+                map["torso"]?.let(::polygon) ?: emptyList())
         }
     }
 }
@@ -56,6 +58,8 @@ internal class GarmentWarp(
     private val spec: GarmentRenderSpec, private val points: List<PosePoint>,
     private val imageWidth: Int, private val imageHeight: Int, mirror: Boolean,
     private val bodyEdges: BodyEdges? = null,
+    private val photoSurface: PhotoSurface = PhotoSurface(spec),
+    private val volumeStrength: Float = .16f,
 ) {
     private val leftIndex: Int
     private val rightIndex: Int
@@ -63,6 +67,7 @@ internal class GarmentWarp(
     private val targetLeft: GPoint
     private val targetRight: GPoint
     private val targetHem: GPoint
+    private val sectionRows=bodyEdges?.sections?.groupBy { it.part }.orEmpty()
     init {
         require(points.size > 24 && imageWidth > 0 && imageHeight > 0)
         val screenLeft = if (points[11].x <= points[12].x) 11 else 12
@@ -85,32 +90,73 @@ internal class GarmentWarp(
     }
     /** One continuous field for the entire photo grid. A shared source vertex
      * has exactly one destination on either side of an armhole. */
-    fun surface(source: GPoint, lag: GPoint = GPoint(0f, 0f)): GPoint {
-        var result = torso(source)
-        for (part in spec.sleeves) result += sleeve(source, part) - torso(source)
-        val a = spec.rightShoulder - spec.leftShoulder
-        val b = spec.hem - spec.leftShoulder
-        val v = (a.cross(source-spec.leftShoulder)/a.cross(b)).coerceIn(0f,1f)
-        // A lifted arm pulls the surrounding underarm cloth continuously. The
-        // influence fades before collar/hem and is relative to this body's axes.
-        val down=targetHem-(targetLeft+targetRight)*.5f
-        val sourceWidth=(spec.rightShoulder-spec.leftShoulder).length
-        val pin=minOf((source-spec.leftShoulder).length,(source-spec.rightShoulder).length)
-            .div(max(1f,sourceWidth*.12f)).coerceIn(0f,1f)
-        for(part in spec.sleeves) {
-            val i=if(part.side=="left")leftIndex else rightIndex
-            val elbow=points[i+2]
-            if(!elbow.finite || elbow.visibility<.5f || elbow.presence<.5f)continue
-            val arm=pixel(i+2)-pixel(i)
-            val dot=(arm.x*down.x+arm.y*down.y)/max(1f,arm.length*down.length)
-            val lift=((.8f-dot)/1.8f).coerceIn(0f,1f)
-            val radius=max(1f,sourceWidth*.24f)
-            val distance=(source-part.armpit).length/radius
-            val falloff=kotlin.math.exp(-distance*distance*2f)*pin*(1f-v*v)
-            result-=down*(.06f*lift*falloff)
+    fun surface(source: GPoint): GPoint = surface(photoSurface.sample(source))
+
+    fun surface(sample: PhotoSurface.Sample): GPoint {
+        val base=torso(sample.source)
+        val torso=fitCrossSection(base,sample.torsoCross,0)
+        var result=torso
+        var sleeveWeight=0f
+        for((i,part) in spec.sleeves.withIndex()) {
+            val weight=sample.weights[i]
+            if(weight>0f) {
+                val partIndex=if(part.side=="left")leftIndex else rightIndex
+                val mapped=sleeve(sample.source,part)
+                val fitted=fitCrossSection(mapped,sample.sleeveCross[i],partIndex,part)
+                result+=(fitted-torso)*weight
+                sleeveWeight+=weight
+            }
         }
-        // Neck/shoulders are pinned; lower cloth follows with bounded inertia.
-        return result + lag * (v*v)
+        val strength=if(volumeStrength.isFinite())volumeStrength.coerceIn(0f,.25f) else 0f
+        if(strength==0f)return result
+        // Volume changes only transverse interior coordinates, after boundary fit.
+        var curve=curveDelta(sample.torsoCross,null)*((1f-sleeveWeight)*sample.torsoFade)
+        for((i,part) in spec.sleeves.withIndex())if(sample.weights[i]>0f)
+            curve+=curveDelta(sample.sleeveCross[i],part)*sample.weights[i]
+        return result+curve*strength
+    }
+
+    private fun curveDelta(cross:PhotoSurface.Cross?,part:SleeveSpec?):GPoint {
+        cross ?: return GPoint(0f,0f)
+        val s=cross.unit.coerceIn(-1f,1f)
+        val sourceDelta=(cross.positive-cross.negative)*(.25f*s*(1f-s*s))
+        if(part==null)return torso(cross.center+sourceDelta)-torso(cross.center)
+        return sleeve(cross.center+sourceDelta,part)-sleeve(cross.center,part)
+    }
+
+    private fun fitCrossSection(base:GPoint,cross:PhotoSurface.Cross?,partIndex:Int,part:SleeveSpec?=null):GPoint {
+        cross ?: return base
+        val rows=sectionRows[partIndex].orEmpty()
+        if(rows.isEmpty())return base
+        val sourceNegative=cross.unit<0f
+        fun map(q:GPoint)=if(part==null)torso(q) else sleeve(q,part)
+        val edge=map(if(sourceNegative)cross.negative else cross.positive)
+        // Interpolate corrections; fade outside observed rows instead of extending
+        // an uncertain mask measurement to collar, cuff or hem.
+        var weighted=GPoint(0f,0f);var total=0f
+        for(row in rows) {
+            val offset=edge-row.center
+            val negative=offset.x*row.normal.x+offset.y*row.normal.y<0f
+            val observed=(if(negative)row.negative else row.positive) ?: continue
+            val normal=row.normal*(if(negative)-1f else 1f)
+            val fromCenter=edge-row.center
+            val expected=fromCenter.x*normal.x+fromCenter.y*normal.y
+            if(expected<1f)continue
+            val target=observed
+            // Preserve product proportions: this is a bounded refinement, not
+            // stretching the virtual garment to cover every pixel of old clothes.
+            val limit=(targetRight-targetLeft).length*(if(part==null).12f else .06f)
+            val correction=(target-expected).coerceIn(-limit,limit)
+            val fraction=if(part==null)cross.fraction else {
+                val shoulder=if(partIndex==leftIndex)targetLeft else targetRight
+                (map(cross.center)-shoulder).length/(pixel(partIndex+2)-shoulder).length.coerceAtLeast(1f)
+            }
+            val weight=smoothUnit(1f-abs(fraction-row.fraction)/.30f)
+            weighted+=normal*(correction*weight);total+=weight
+        }
+        if(total==0f)return base
+        val pin=if(part==null)smoothUnit(cross.fraction/.20f)*(1f-smoothUnit((cross.fraction-.8f)/.2f)) else 1f
+        return base+weighted*(minOf(1f,total)/total*abs(cross.unit).coerceIn(0f,1f)*pin)
     }
     fun sleeve(source: GPoint, sleeve: SleeveSpec): GPoint {
         val base = torso(source)

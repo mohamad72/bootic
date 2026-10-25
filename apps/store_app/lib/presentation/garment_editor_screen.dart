@@ -19,6 +19,7 @@ import '../domain/garment_model_metadata.dart';
 import '../domain/persian.dart';
 import 'common.dart';
 import 'dynamic_field.dart';
+import 'garment_geometry_preview.dart';
 
 class GarmentEditorScreen extends ConsumerStatefulWidget {
   const GarmentEditorScreen({this.id, super.key});
@@ -758,7 +759,7 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                     title: 'عکس‌های لباس',
                     children: [
                       const Text(
-                        'لباس را روی زمینه ساده، با نور یکنواخت و بدون حضور مشتری عکاسی کنید. چهار نمای روبرو، پشت، چپ و راست را از گالری انتخاب کنید. برای کاتالوگ عکس روبرو ضروری است.',
+                        'لباس صاف را روی زمینه ساده و با نور پراکنده عکاسی کنید. نوردهی و تراز سفیدی عکس با محل پرو مشابه باشد؛ سایه تند و نور ترکیبی نباشد. برای کاتالوگ عکس روبرو ضروری است.',
                       ),
                       const Text(
                         'عکس اصلی حفظ می‌شود. برای پرو زنده، مرز لباس و یقه فقط از JSON خوانده می‌شود. تعویض عکس روبرو به JSON تازه نیاز دارد.',
@@ -946,6 +947,11 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                         },
                         onChanged: (_) => _changed(),
                       ),
+                      if (_photos['front_source'] != null)
+                        GarmentGeometryPreview(
+                          photoPath: _photos['front_source']!,
+                          controller: _renderJson,
+                        ),
                       if (_renderJson.text.trim().isNotEmpty &&
                           _photos['front_source'] == null)
                         const Text(

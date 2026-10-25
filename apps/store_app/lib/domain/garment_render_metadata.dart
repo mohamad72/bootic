@@ -128,6 +128,11 @@ class GarmentRenderMetadata {
       'holes': holes,
       'anchors': anchors,
       'sleeves': sleeves,
+      if (regions['torso'] != null)
+        'torso': polygon(
+          object(regions['torso'], 'torso')['polygon_px'],
+          'torso',
+        ),
       'mirrorTexture':
           rendering['mirror_texture_only_if_front_camera_is_mirrored'] == true,
     });

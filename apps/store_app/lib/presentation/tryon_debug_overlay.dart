@@ -88,7 +88,8 @@ class TryonDebugOverlay extends StatelessWidget {
         'راهنما: سبز = مفاصل؛ صورتی = مرز ماسک بدن؛ زرد = اتصال اصلاح‌شدهٔ شانه؛ آبی = محدودهٔ نقاط.',
         'نارنجی: ${d?.flag('garmentRendered') == true ? 'محدودهٔ تقریبی لباس فعال' : 'کادر راهنمای تنه؛ لباس JSON فعال نیست'}',
         'رندر لباس: ${d?.text('renderer') ?? '—'}',
-        'بافت: عکس اصلی | شبکهٔ پیوسته: ${n('modelTriangles')} مثلث | حرکت پایین لباس: حداکثر ۲٫۵٪ عرض شانه',
+        'بافت: عکس اصلی | شبکهٔ پیوسته: ${n('modelTriangles')} مثلث | حجم ملایم؛ بدون کشش و تأخیر مصنوعی پارچه',
+        'شدت تغییرشکل ایمن: ${n('deformationScale', 2)}؛ کاهش آن یعنی جلوگیری از وارونگی شبکه',
         'اختلاف عمق شانه‌ها: ${n('shoulderDepth', 1)} px؛ عمق تخمینی مدل بدن است',
         'کادر ورودی مشترک: ${d?.text('frameGeometry') ?? '—'}',
         'توضیح: مرز صورتی تخمین بدن و لباس فعلی است، نه پوست زیر لباس. اندازهٔ سانتی‌متری بدون کالیبراسیون نداریم.',
@@ -243,6 +244,18 @@ class _PoseDebugPainter extends CustomPainter {
         for (final value in contour) {
           final point = extraPoint(value);
           if (point != null) canvas.drawCircle(point, 1.2, dots);
+        }
+      }
+      final sections = d.values['fitSections'];
+      if (sections is List) {
+        final marker = Paint()..color = Colors.cyanAccent;
+        for (final section in sections) {
+          if (section is! Map) continue;
+          final a = extraPoint(section['negative']);
+          final b = extraPoint(section['positive']);
+          if (a != null) canvas.drawCircle(a, 4, marker);
+          if (b != null) canvas.drawCircle(b, 4, marker);
+          if (a != null && b != null) canvas.drawLine(a, b, marker);
         }
       }
       for (final index in [11, 12]) {

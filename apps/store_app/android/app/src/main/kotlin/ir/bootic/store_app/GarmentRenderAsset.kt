@@ -21,6 +21,9 @@ internal data class GarmentPiece(
 
 /** Prepared once when a garment changes, never segmented/decoded per frame. */
 internal class GarmentRenderAsset(val spec: GarmentRenderSpec?, val masked: Bitmap, val pieces: List<GarmentPiece>, val model: GarmentModel? = null) {
+    // Constructed by the existing background asset loader, shared by bounds and
+    // both displays. Live frames never walk all source polygon edges again.
+    val photoMesh:PhotoMesh?=spec?.let { PhotoMesh(it) }
     fun bounds(pose: PoseObservation, mirror: Boolean): TorsoBox? {
         if (pose.box == null) return null
         model?.let { m ->
@@ -29,13 +32,12 @@ internal class GarmentRenderAsset(val spec: GarmentRenderSpec?, val masked: Bitm
             val t=frame.positions.minOf { it.y }; val b=frame.positions.maxOf { it.y }
             return TorsoBox((l+r)/2/pose.imageWidth,(t+b)/2/pose.imageHeight,(r-l)/pose.imageWidth,(b-t)/pose.imageHeight,pose.imageWidth,pose.imageHeight,pose.personFrame)
         }
-        val warp = GarmentWarp(requireNotNull(spec), pose.points, pose.imageWidth, pose.imageHeight, mirror, pose.bodyEdges)
-        val mapped = pieces.flatMap { piece -> piece.polygon.map {
-            warp.surface(it)
-        } }
-        if (mapped.isEmpty()) return null
-        val l = mapped.minOf { it.x }; val r = mapped.maxOf { it.x }
-        val t = mapped.minOf { it.y }; val b = mapped.maxOf { it.y }
+        val mesh=photoMesh ?: return null
+        val warp = GarmentWarp(requireNotNull(spec), pose.points, pose.imageWidth, pose.imageHeight, mirror, pose.bodyEdges,mesh.surface)
+        val mapped=mesh.project(warp,pose,mirror)
+        if(mesh.boundIndices.isEmpty())return null
+        val l=mesh.boundIndices.minOf { mapped[it*2] };val r=mesh.boundIndices.maxOf { mapped[it*2] }
+        val t=mesh.boundIndices.minOf { mapped[it*2+1] };val b=mesh.boundIndices.maxOf { mapped[it*2+1] }
         return TorsoBox((l+r)/2/pose.imageWidth, (t+b)/2/pose.imageHeight,
             (r-l)/pose.imageWidth, (b-t)/pose.imageHeight, pose.imageWidth, pose.imageHeight, pose.personFrame)
     }
