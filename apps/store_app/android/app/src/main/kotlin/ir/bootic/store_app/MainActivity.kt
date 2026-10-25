@@ -608,13 +608,24 @@ class MainActivity : FlutterActivity() {
         val phone = previewView
         val frame = observation?.personFrame
         val edges = observation?.bodyEdges
+        val diagnosticLines=if(observation?.box!=null) {
+            val lines=BoundaryDiagnostics.body(observation).toMutableList()
+            val asset=renderAsset;val spec=asset?.spec;val mesh=asset?.photoMesh
+            if(spec!=null&&mesh!=null) {
+                val warp=GarmentWarp(spec,observation.points,observation.imageWidth,observation.imageHeight,mirror,edges,mesh.surface)
+                lines.addAll(BoundaryDiagnostics.garment(spec,mesh,warp,observation,mirror))
+            }
+            lines.map { line -> mapOf("kind" to line.kind,"evidence" to line.evidence,
+                "points" to line.points.map { listOf(it.x.toDouble()/observation.imageWidth,it.y.toDouble()/observation.imageHeight) }) }
+        } else emptyList()
         fun anchor(index: Int): List<Double>? {
             val o = observation ?: return null
             val p = edges?.shoulder(index) ?: return null
             return listOf((p.x/o.imageWidth).toDouble(), (p.y/o.imageHeight).toDouble())
         }
         eventSink?.success(mapOf(
-            "type" to "poseDebug", "revision" to "pose-v5-edges",
+            "type" to "poseDebug", "revision" to "pose-v6-boundaries",
+            "boundaryLines" to diagnosticLines,
             "version" to debugVersion,
             "frameGeometry" to frameGeometry,
             "edgeStatus" to (edges?.status ?: "waiting"),
@@ -653,8 +664,9 @@ class MainActivity : FlutterActivity() {
             "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
             "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
             "voting" to votingEnabled,
-            "renderer" to (if (renderAsset == null) "none" else if(renderAsset?.model != null) "parametric-3d-v1" else "photo-surface-v2"),
+            "renderer" to (if (renderAsset == null) "none" else if(renderAsset?.model != null) "parametric-3d-v1" else "photo-surface-v3"),
             "deformationScale" to (phoneGarment?.deformationScale?.toDouble() ?: 1.0),
+            "bodyFitScale" to (renderAsset?.photoMesh?.bodyFitScale?.toDouble() ?: 1.0),
             "modelKind" to (renderAsset?.model?.spec?.kind ?: "—"),
             "materialMode" to (renderAsset?.model?.spec?.mode ?: "photo"),
             "modelTriangles" to (if(renderAsset != null)48*64*2 else 0),

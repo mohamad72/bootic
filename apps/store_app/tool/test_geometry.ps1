@@ -10,7 +10,7 @@ $out = Join-Path $root 'build/geometry-tests'
 New-Item -ItemType Directory -Force $out | Out-Null
 $native = Join-Path $root 'android/app/src/main/kotlin/ir/bootic/store_app'
 $testRoot = Join-Path $root 'android/app/src/test/kotlin/ir/bootic/store_app'
-$names = @('GarmentWarp','PhotoSurface','PhotoCloth','BodyEdgeFit','PoseGeometry','TryonEffectGeometry','CameraFrameCrop','GestureVoteGate','GarmentModel')
+$names = @('GarmentWarp','PhotoSurface','PhotoCloth','BodyEdgeFit','BoundaryDiagnostics','PoseGeometry','TryonEffectGeometry','CameraFrameCrop','GestureVoteGate','GarmentModel')
 $sources = @($names | ForEach-Object { $p = Join-Path $native "$_.kt"; if (Test-Path $p) { $p } })
 $testFiles = @(Get-ChildItem $testRoot -Filter '*Test.kt')
 $classpath = "$compiler/kotlin-stdlib.jar;$junit;$hamcrest"

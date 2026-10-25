@@ -53,4 +53,22 @@ class GarmentWarpTest {
         same(edges.shoulder11,mirrored.torso(spec.leftShoulder))
     }
 
+    @Test fun highSourceNeckCannotExtrapolateOntoFaceEvenWithLiftedShoulders() {
+        val source=GarmentRenderSpec(1000f,1200f,
+            listOf(GPoint(100f,0f),GPoint(900f,0f),GPoint(900f,1100f),GPoint(100f,1100f)),
+            listOf(listOf(GPoint(400f,0f),GPoint(600f,0f),GPoint(600f,200f),GPoint(400f,200f))),
+            GPoint(100f,400f),GPoint(900f,400f),GPoint(500f,1100f),emptyList(),true)
+        val p=points().apply {
+            this[11]=PosePoint(.7f,.35f,1f,1f);this[12]=PosePoint(.3f,.35f,1f,1f)
+            this[23]=PosePoint(.6f,.75f,1f,1f);this[24]=PosePoint(.4f,.75f,1f,1f)
+            this[9]=PosePoint(.47f,.18f,1f,1f);this[10]=PosePoint(.53f,.18f,1f,1f)
+        }
+        for(mirror in listOf(false,true)) {
+            val warp=GarmentWarp(source,p,400,600,mirror,
+                BodyEdges(shoulder11=GPoint(280f,170f),shoulder12=GPoint(120f,170f)))
+            assertTrue("neck must remain at the shoulder/neck base, below the face",warp.surface(GPoint(500f,0f)).y>=190f)
+            same(GPoint(200f,450f),warp.surface(source.hem))
+        }
+    }
+
 }

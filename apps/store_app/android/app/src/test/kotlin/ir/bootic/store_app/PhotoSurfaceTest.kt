@@ -25,15 +25,18 @@ class PhotoSurfaceTest {
         val warp=GarmentWarp(spec,pose(),400,600,false)
         for(q in listOf(left.shoulder,left.armpit,right.shoulder,right.armpit,spec.hem)) same(warp.torso(q),warp.surface(q))
     }
-    @Test fun zeroVolumeIsExactAndCurvaturePreservesContourAndHem() {
+    @Test fun rollCompressesOnlyOuterBandsAndPreservesCenterAnchorsAndHem() {
         val p=pose()
         val flat=GarmentWarp(spec,p,400,600,false,volumeStrength=0f)
         val curved=GarmentWarp(spec,p,400,600,false,volumeStrength=.2f)
-        for(q in listOf(spec.leftShoulder,spec.rightShoulder,spec.hem,GPoint(40f,600f),GPoint(960f,600f),GPoint(350f,1100f))) same(flat.surface(q),curved.surface(q))
+        for(q in listOf(spec.leftShoulder,spec.rightShoulder,spec.hem,GPoint(350f,1100f),GPoint(900f,1000f))) same(flat.surface(q),curved.surface(q))
         val q=GPoint(700f,600f)
         same(flat.torso(q),flat.surface(q))
-        val shift=(curved.surface(q)-flat.surface(q)).length
+        same(flat.surface(q),curved.surface(q))
+        val edge=GPoint(960f,600f)
+        val shift=(curved.surface(edge)-flat.surface(edge)).length
         assertTrue(shift>.1f && shift<6f)
+        assertTrue(curved.surface(edge).x<flat.surface(edge).x)
     }
     @Test fun observedTorsoBoundaryAdjustsSideButLeavesCenterAndShouldersPinned() {
         val p=pose()
@@ -69,5 +72,60 @@ class PhotoSurfaceTest {
         assertEquals(20f,next[0]-first[0],.001f)
         val mirror=mesh.project(GarmentWarp(spec,moved,400,600,true),moved,true)
         assertTrue((next[0]-mirror[0]).let { kotlin.math.abs(it)>20f })
+    }
+
+    @Test fun jaggedSourceSilhouetteCannotPrintKinksThroughStraightInteriorStripes() {
+        val source=spec.copy(sleeves=emptyList(),outer=listOf(
+            GPoint(100f,100f),GPoint(900f,100f),GPoint(900f,500f),GPoint(700f,510f),
+            GPoint(900f,520f),GPoint(900f,1100f),GPoint(100f,1100f)),torsoPolygon=emptyList())
+        val p=pose()
+        val fit=BodyEdges(sections=listOf(BodySection(0,.5f,GPoint(200f,285f),GPoint(1f,0f),120f,120f)))
+        val warp=GarmentWarp(source,p,400,600,false,fit)
+        val a=warp.surface(GPoint(650f,495f));val b=warp.surface(GPoint(650f,510f));val c=warp.surface(GPoint(650f,525f))
+        assertTrue("a tiny contour notch must not crease the shirt interior",kotlin.math.abs(b.x-(a.x+c.x)*.5f)<.5f)
+    }
+
+    @Test fun sleeveArticulationIsBlendedOnceAcrossItsSourceSeam() {
+        val surface=PhotoSurface(spec)
+        val q=(left.shoulder+left.hem)*.5f
+        val warp=GarmentWarp(spec,pose(),400,600,false,volumeStrength=0f)
+        same(warp.sleeve(q,left),warp.surface(surface.sample(q)))
+    }
+
+    @Test fun shoulderSurfaceCorrectionDoesNotLiftTheWholeNeckOrChest() {
+        val p=pose()
+        val flat=GarmentWarp(spec,p,400,600,false)
+        val lifted=GarmentWarp(spec,p,400,600,false,BodyEdges(shoulder11=GPoint(280f,90f),shoulder12=GPoint(120f,90f)))
+        for(q in listOf(GPoint(500f,100f),GPoint(500f,600f),spec.hem))same(flat.torso(q),lifted.torso(q))
+        same(GPoint(120f,90f),lifted.torso(spec.leftShoulder))
+    }
+
+    @Test fun sleeveTopologyFallbackDoesNotUndoTorsoEdgeFitting() {
+        val p=pose();val edges=BodyEdges(sections=listOf(BodySection(0,.5f,GPoint(200f,285f),GPoint(1f,0f),110f,110f)))
+        val mesh=PhotoMesh(spec,24,32)
+        val index=mesh.samples.indices.minBy { (mesh.samples[it].source-GPoint(800f,700f)).length }
+        val before=mesh.project(GarmentWarp(spec,p.toList(),400,600,false,edges)).copyOf()
+        p[14]=p[14].copy(x=.02f,y=.08f)
+        val after=mesh.project(GarmentWarp(spec,p,400,600,false,edges))
+        assertEquals("arm fallback must preserve fitted torso",before[index*2],after[index*2],.01f)
+        assertEquals(before[index*2+1],after[index*2+1],.01f)
+    }
+
+    @Test fun finalMeshCannotUndoNeckProtectionWhenHeadBendsBelowShoulders() {
+        val source=GarmentRenderSpec(1000f,1200f,
+            listOf(GPoint(100f,0f),GPoint(900f,0f),GPoint(900f,1100f),GPoint(100f,1100f)),
+            listOf(listOf(GPoint(400f,0f),GPoint(600f,0f),GPoint(600f,200f),GPoint(400f,200f))),
+            GPoint(100f,400f),GPoint(900f,400f),GPoint(500f,1100f),emptyList(),true)
+        val p=pose().apply {
+            this[11]=PosePoint(.3f,.3f,1f,1f);this[12]=PosePoint(.7f,.3f,1f,1f)
+            this[9]=PosePoint(.47f,.4f,1f,1f);this[10]=PosePoint(.53f,.4f,1f,1f)
+        }
+        assertNotNull(PoseGeometry.evaluate(p,400,600).box)
+        for(mirror in listOf(false,true)) {
+            val warp=GarmentWarp(source,p,400,600,mirror,volumeStrength=0f)
+            val mesh=PhotoMesh(source)
+            val final=mesh.projectedPoint(GPoint(500f,0f),mesh.project(warp))
+            assertTrue("final mesh must keep the neckline below mouth plus margin",final.y>=259f)
+        }
     }
 }

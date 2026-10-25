@@ -13,6 +13,7 @@ import '../domain/garment_model_metadata.dart';
 import '../domain/persian.dart';
 import '../domain/pose_diagnostics.dart';
 import 'tryon_debug_overlay.dart';
+import 'boundary_debug_overlay.dart';
 
 /// Customer mode: opening the tab opens the front camera immediately.
 class LiveTryonScreen extends ConsumerStatefulWidget {
@@ -28,6 +29,8 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   StreamSubscription<LivePlacement>? _placementSubscription;
   StreamSubscription<PoseDebugSnapshot>? _debugSubscription;
   bool _debugEnabled = false;
+  bool _boundaryEnabled = false;
+  bool _boundaryGhost = true;
   bool _debugGhost = false;
   bool _debugDetails = false;
   PoseDebugSnapshot? _poseDebug;
@@ -55,13 +58,16 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   String? _error;
   LivePlacement? _placement;
   final Map<String, bool> _votes = {};
+  bool get _diagnosticsEnabled => _debugEnabled || _boundaryEnabled;
+  bool get _diagnosticGhost =>
+      (_debugEnabled && _debugGhost) || (_boundaryEnabled && _boundaryGhost);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _debugSubscription = _bridge.poseDiagnostics.listen((snapshot) {
-      if (mounted && _debugEnabled) setState(() => _poseDebug = snapshot);
+      if (mounted && _diagnosticsEnabled) setState(() => _poseDebug = snapshot);
     }, onError: _showError);
     _placementSubscription = _bridge.placements.listen(
       _onPlacement,
@@ -146,6 +152,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         !_switchingCamera &&
         !_votePending &&
         !_changingGarment &&
+        !_boundaryEnabled &&
         !_finished,
   );
 
@@ -168,7 +175,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     }
     if (!mounted || session != _session || !_running) return;
     await _bridge.setGarment(photo, renderMetadata: render?.toNativeMap());
-    await _bridge.setGarmentGhost(_debugEnabled && _debugGhost);
+    await _bridge.setGarmentGhost(_diagnosticGhost);
     await _bridge.setPrice(
       garment?.effectivePrice == null
           ? ''
@@ -280,7 +287,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       if (!mounted || session != _session) return;
       await _bridge.setFeedback('');
       await _bridge.setAutoPlacement(true);
-      await _bridge.setPoseDebugEnabled(_debugEnabled);
+      await _bridge.setPoseDebugEnabled(_diagnosticsEnabled);
       if (!mounted || session != _session) return;
       try {
         await _bridge.setGestureControl(true);
@@ -349,15 +356,17 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   }
 
   Future<void> _vote(bool liked) async {
-    if (!_running ||
+    if (_boundaryEnabled ||
+        !_running ||
         !_personFound ||
         !_garmentReady ||
         _garmentId == null ||
         _busy ||
         _switchingCamera ||
         _votePending ||
-        _finished)
+        _finished) {
       return;
+    }
     final items = _eligible(ref.read(catalogProvider).value);
     final index = items.indexWhere((g) => g.id == _garmentId);
     if (index < 0) return;
@@ -484,20 +493,30 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     }
   }
 
-  Future<void> _toggleDebug() async {
-    final enabled = !_debugEnabled;
+  Future<void> _setDiagnosticMode({
+    required bool debug,
+    required bool boundaries,
+  }) async {
     try {
-      await _bridge.setPoseDebugEnabled(enabled);
-      if (mounted)
+      await _bridge.setPoseDebugEnabled(debug || boundaries);
+      if (mounted) {
         setState(() {
-          _debugEnabled = enabled;
+          _debugEnabled = debug;
+          _boundaryEnabled = boundaries;
           _poseDebug = null;
         });
-      await _bridge.setGarmentGhost(enabled && _debugGhost);
+      }
+      await _bridge.setGarmentGhost(_diagnosticGhost);
+      await _syncVoting();
     } catch (error) {
       _showError(error);
     }
   }
+
+  Future<void> _toggleDebug() =>
+      _setDiagnosticMode(debug: !_debugEnabled, boundaries: false);
+  Future<void> _toggleBoundaries() =>
+      _setDiagnosticMode(debug: false, boundaries: !_boundaryEnabled);
 
   Future<void> _restart() async {
     _votes.clear();
@@ -573,12 +592,42 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
                 ? 'خاموش کردن دیباگ'
                 : 'روشن کردن دیباگ تشخیص بدن',
             isSelected: _debugEnabled,
-            onPressed: _running ? _toggleDebug : null,
+            onPressed: _running || _debugEnabled ? _toggleDebug : null,
             icon: const Icon(Icons.bug_report_outlined),
             selectedIcon: const Icon(Icons.bug_report),
           ),
         ),
-        if (visible && selected != null && selected.effectivePrice != null)
+        Positioned(
+          top: 12,
+          left: 68,
+          child: IconButton.filledTonal(
+            tooltip: _boundaryEnabled
+                ? 'بستن مرز بدن و خم لباس'
+                : 'نمایش مرز بدن و خم لباس',
+            isSelected: _boundaryEnabled,
+            onPressed: _running || _boundaryEnabled ? _toggleBoundaries : null,
+            icon: const Icon(Icons.polyline_outlined),
+            selectedIcon: const Icon(Icons.polyline),
+          ),
+        ),
+        if (_boundaryEnabled)
+          Positioned(
+            top: 12,
+            left: 124,
+            child: IconButton.filledTonal(
+              tooltip: _frontCamera
+                  ? 'استفاده از دوربین عقب'
+                  : 'استفاده از دوربین جلو',
+              onPressed: _running && !_busy && !_switchingCamera
+                  ? _switchCamera
+                  : null,
+              icon: const Icon(Icons.cameraswitch_outlined),
+            ),
+          ),
+        if (!_boundaryEnabled &&
+            visible &&
+            selected != null &&
+            selected.effectivePrice != null)
           Positioned(
             top: 16,
             right: 16,
@@ -589,119 +638,139 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
               18,
             ),
           ),
-        Center(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 350),
-            child: _voteFeedback != null
-                ? _badge(_voteFeedback!, 23)
-                : _finished
-                ? _badge('همه لباس‌ها را دیدید', 20)
-                : const SizedBox.shrink(key: ValueKey('clear')),
-          ),
-        ),
-        Positioned(
-          left: 16,
-          right: 16,
-          bottom: 16,
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_error != null) ...[
-                  _badge(_error!, 14),
-                  const SizedBox(height: 8),
-                ],
-                if (_running && !_personFound && !_detecting)
-                  _badge('روبه‌روی دوربین بایستید', 16),
-                if (_running && _personFound && placement?.visible != true)
-                  _badge('کمی عقب بروید تا دوباره دیده شوید', 15),
-                if (!_running && _error != null)
-                  FilledButton.icon(
-                    onPressed: _busy ? null : _start,
-                    icon: const Icon(Icons.videocam),
-                    label: Text(
-                      _busy ? 'دوربین در حال باز شدن است' : 'تلاش دوباره',
-                    ),
-                  ),
-                if (!_running && _error == null)
-                  Platform.isAndroid
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : _badge('دوربین زنده روی نسخه اندروید در دسترس است', 16),
-                if (_running &&
-                    _personFound &&
-                    !_finished &&
-                    selected != null) ...[
-                  const SizedBox(height: 8),
-                  _badge(selected.name, 16),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed:
-                              !_garmentReady ||
-                                  _busy ||
-                                  _votePending ||
-                                  _switchingCamera
-                              ? null
-                              : () => _vote(true),
-                          icon: const Icon(Icons.thumb_up_alt_outlined),
-                          label: const Text('لایک'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: FilledButton.tonalIcon(
-                          onPressed:
-                              !_garmentReady ||
-                                  _busy ||
-                                  _votePending ||
-                                  _switchingCamera
-                              ? null
-                              : () => _vote(false),
-                          icon: const Icon(Icons.thumb_down_alt_outlined),
-                          label: const Text('دیسلایک'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (_gestureReady)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Text(
-                        'شست بالا یا پایین؛ بعد از ثبت، دست را پایین بیاورید',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                ],
-                if (_running) ...[
-                  const SizedBox(height: 8),
-                  IconButton.filledTonal(
-                    tooltip: _frontCamera
-                        ? 'استفاده از دوربین عقب'
-                        : 'استفاده از دوربین جلو',
-                    onPressed: _busy || _switchingCamera || _votePending
-                        ? null
-                        : _switchCamera,
-                    icon: _switchingCamera
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.cameraswitch_outlined),
-                  ),
-                ],
-                if (_running && _finished)
-                  FilledButton(
-                    onPressed: _restart,
-                    child: const Text('شروع دوباره'),
-                  ),
-              ],
+        if (!_boundaryEnabled)
+          Center(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              child: _voteFeedback != null
+                  ? _badge(_voteFeedback!, 23)
+                  : _finished
+                  ? _badge('همه لباس‌ها را دیدید', 20)
+                  : const SizedBox.shrink(key: ValueKey('clear')),
             ),
           ),
-        ),
+        if (!_boundaryEnabled)
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 16,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_error != null) ...[
+                    _badge(_error!, 14),
+                    const SizedBox(height: 8),
+                  ],
+                  if (_running && !_personFound && !_detecting)
+                    _badge('روبه‌روی دوربین بایستید', 16),
+                  if (_running && _personFound && placement?.visible != true)
+                    _badge('کمی عقب بروید تا دوباره دیده شوید', 15),
+                  if (!_running && _error != null)
+                    FilledButton.icon(
+                      onPressed: _busy ? null : _start,
+                      icon: const Icon(Icons.videocam),
+                      label: Text(
+                        _busy ? 'دوربین در حال باز شدن است' : 'تلاش دوباره',
+                      ),
+                    ),
+                  if (!_running && _error == null)
+                    Platform.isAndroid
+                        ? const CircularProgressIndicator(color: Colors.white)
+                        : _badge(
+                            'دوربین زنده روی نسخه اندروید در دسترس است',
+                            16,
+                          ),
+                  if (_running &&
+                      _personFound &&
+                      !_finished &&
+                      selected != null) ...[
+                    const SizedBox(height: 8),
+                    _badge(selected.name, 16),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed:
+                                !_garmentReady ||
+                                    _busy ||
+                                    _votePending ||
+                                    _switchingCamera
+                                ? null
+                                : () => _vote(true),
+                            icon: const Icon(Icons.thumb_up_alt_outlined),
+                            label: const Text('لایک'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            onPressed:
+                                !_garmentReady ||
+                                    _busy ||
+                                    _votePending ||
+                                    _switchingCamera
+                                ? null
+                                : () => _vote(false),
+                            icon: const Icon(Icons.thumb_down_alt_outlined),
+                            label: const Text('دیسلایک'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_gestureReady)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          'شست بالا یا پایین؛ بعد از ثبت، دست را پایین بیاورید',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                  ],
+                  if (_running) ...[
+                    const SizedBox(height: 8),
+                    IconButton.filledTonal(
+                      tooltip: _frontCamera
+                          ? 'استفاده از دوربین عقب'
+                          : 'استفاده از دوربین جلو',
+                      onPressed: _busy || _switchingCamera || _votePending
+                          ? null
+                          : _switchCamera,
+                      icon: _switchingCamera
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.cameraswitch_outlined),
+                    ),
+                  ],
+                  if (_running && _finished)
+                    FilledButton(
+                      onPressed: _restart,
+                      child: const Text('شروع دوباره'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        if (_boundaryEnabled)
+          Positioned.fill(
+            child: BoundaryDebugOverlay(
+              snapshot: _poseDebug,
+              ghost: _boundaryGhost,
+              onGhostChanged: (value) {
+                setState(() => _boundaryGhost = value);
+                unawaited(
+                  _bridge
+                      .setGarmentGhost(_diagnosticGhost)
+                      .catchError(_showError),
+                );
+              },
+            ),
+          ),
       ],
     );
   }

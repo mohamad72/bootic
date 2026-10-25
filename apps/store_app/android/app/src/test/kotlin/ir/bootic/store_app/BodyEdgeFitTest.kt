@@ -13,9 +13,18 @@ class BodyEdgeFitTest {
     }
     private fun mask(value: (Float, Float) -> Float) = BodyMask(200, 300) { x, y -> value((x+.5f)/200, (y+.5f)/300) }
     private fun silhouette() = mask { x,y -> if (x in .2f.. .8f && y in .24f.. .9f) 1f else 0f }
+    @Test fun neckAndHipDiagnosticSectionsFindVisibleEndpointsAtTheirPosePlanes() {
+        val fit=BodyEdgeFit.refine(pose(),mask { x,y ->
+            if(x in .2f.. .8f&&y in .29f.. .9f || x in .45f.. .55f&&y in .1f.. .3f)1f else 0f
+        })
+        val neck=fit.sections.find { it.part==-1 }
+        assertNotNull("neck diagnostic needs mask endpoint evidence",neck)
+        assertEquals(20f,neck!!.negative!!,3f);assertEquals(20f,neck.positive!!,3f)
+        assertNotNull(fit.sections.find { it.part==0&&it.fraction==1f })
+    }
     @Test fun torsoCrossSectionsFindBothSidesAndRejectFlatMasks() {
         val fit=BodyEdgeFit.refine(pose(),silhouette())
-        val rows=fit.sections.filter { it.part==0 }
+        val rows=fit.sections.filter { it.part==0&&it.fraction<1f }
         assertEquals(3,rows.size)
         for(row in rows) {
             assertEquals(120f,row.negative!!,4f)

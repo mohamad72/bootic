@@ -159,7 +159,11 @@ internal object BodyEdgeFit {
                 if(negative!=null || positive!=null)rows.add(BodySection(part,t,center,normal,negative,positive))
             }
         }
-        add(0,(p(11)+p(12))*.5f,(p(23)+p(24))*.5f,listOf(.25f,.5f,.75f),span*.85f)
+        val shoulders=(p(11)+p(12))*.5f;val hips=(p(23)+p(24))*.5f
+        // The hip plane and neck plane are diagnostic measurements only. They
+        // are not semantic segmentation, and GarmentWarp excludes them from fit.
+        add(0,shoulders,hips,listOf(.25f,.5f,.75f,1f),span*.85f)
+        add(-1,shoulders-(hips-shoulders)*.25f,shoulders,listOf(.68f),span*.30f)
         for(i in listOf(11,12))if(reliable(i)&&reliable(i+2))
             add(i,p(i),p(i+2),listOf(.35f,.65f),span*.35f)
         return rows

@@ -6,6 +6,12 @@ class PoseDebugPoint {
   bool get confident => valid && visibility >= 0.5 && presence >= 0.5;
 }
 
+class BoundaryDebugLine {
+  const BoundaryDebugLine(this.kind, this.evidence, this.points);
+  final String kind, evidence;
+  final List<(double, double)> points;
+}
+
 class PoseDebugSnapshot {
   PoseDebugSnapshot.fromMap(this.values)
     : points = [
@@ -20,6 +26,53 @@ class PoseDebugSnapshot {
       ];
   final Map<Object?, Object?> values;
   final List<PoseDebugPoint> points;
+  List<BoundaryDebugLine> get boundaryLines {
+    if (!fresh ||
+        text('reason') != 'accepted' ||
+        number('imageWidth') <= 0 ||
+        number('imageHeight') <= 0) {
+      return const [];
+    }
+    final values = this.values['boundaryLines'];
+    if (values is! List) return const [];
+    final lines = <BoundaryDebugLine>[];
+    for (final value in values.take(40)) {
+      if (value is! Map ||
+          value['kind'] is! String ||
+          !const {
+            'estimated',
+            'mask',
+            'rendered',
+          }.contains(value['evidence'])) {
+        continue;
+      }
+      final raw = value['points'];
+      if (raw is! List || raw.length < 2 || raw.length > 1200) continue;
+      final points = <(double, double)>[];
+      for (final point in raw) {
+        if (point is! List ||
+            point.length != 2 ||
+            point.any((p) => p is! num || !p.isFinite)) {
+          break;
+        }
+        points.add((
+          (point[0] as num).toDouble(),
+          (point[1] as num).toDouble(),
+        ));
+      }
+      if (points.length == raw.length) {
+        lines.add(
+          BoundaryDebugLine(
+            value['kind'] as String,
+            value['evidence'] as String,
+            points,
+          ),
+        );
+      }
+    }
+    return lines;
+  }
+
   double number(String key) {
     final value = (values[key] as num?)?.toDouble() ?? 0;
     return value.isFinite ? value : 0;

@@ -67,7 +67,18 @@ internal class GarmentWarp(
     private val targetLeft: GPoint
     private val targetRight: GPoint
     private val targetHem: GPoint
-    private val sectionRows=bodyEdges?.sections?.groupBy { it.part }.orEmpty()
+    private val neckFloor:Float by lazy {
+        val mid=(pixel(11)+pixel(12))*.5f;val down=targetHem-mid
+        val axis=down*(1f/down.length.coerceAtLeast(1f))
+        var floor=-.08f
+        if(listOf(9,10).all { points[it].finite&&points[it].visibility>=.6f&&points[it].presence>=.6f }) {
+            val mouth=(pixel(9)+pixel(10))*.5f-mid
+            val depth=mouth.x*axis.x+mouth.y*axis.y
+            val faceFloor=(depth+(pixel(11)-pixel(12)).length*.12f)/down.length.coerceAtLeast(1f)
+            if(depth in -(pixel(11)-pixel(12)).length..down.length*.3f && faceFloor<.65f)floor=max(floor,faceFloor)
+        }
+        floor
+    }
     init {
         require(points.size > 24 && imageWidth > 0 && imageHeight > 0)
         val screenLeft = if (points[11].x <= points[12].x) 11 else 12
@@ -79,84 +90,102 @@ internal class GarmentWarp(
         targetRight = bodyEdges?.shoulder(rightIndex) ?: pixel(rightIndex)
         targetHem = (pixel(23) + pixel(24)) * 0.5f
     }
+    private fun referenceAt(local:GPoint):GPoint {
+        // Source collars above their shoulder anchors must not extrapolate an
+        // arbitrary distance up the face. This is monotonic, with unit slope at 0.
+        val bounded=if(local.y<0f).08f*local.y/(.08f-local.y) else local.y
+        // Face protection belongs in the safe reference, so topology fallback
+        // cannot undo it. Both maps are monotonic in v, and the hem stays fixed.
+        // Only the central neck/chest moves for a bowed head; shoulders stay pinned.
+        val central=1f-smoothUnit((abs(local.x)-.35f)/.15f)
+        val v=bounded+(neckFloor+.08f)*((1f-bounded)/1.08f).coerceIn(0f,1f)*central
+        val left=pixel(leftIndex);val right=pixel(rightIndex);val mid=(left+right)*.5f
+        return mid+(right-left)*local.x+(targetHem-mid)*v
+    }
+    fun referenceTorso(source:GPoint)=referenceAt(photoSurface.torsoLocal(source))
+    private fun rawTorso(local:GPoint):GPoint {
+        // A silhouette correction belongs at the outer shoulder. Translating the
+        // whole affine frame by it used to lift the neck and resize the chest.
+        val weight=smoothUnit((abs(local.x)-.35f)/.15f)*(1f-smoothUnit(max(local.y,0f)/.3f))
+        val correction=if(local.x<0f)targetLeft-pixel(leftIndex) else targetRight-pixel(rightIndex)
+        return referenceAt(local)+correction*weight
+    }
     fun torso(source: GPoint): GPoint {
-        val a = spec.rightShoulder - spec.leftShoulder
-        val b = spec.hem - spec.leftShoulder
-        val q = source - spec.leftShoulder
-        val determinant = a.cross(b)
-        val u = q.cross(b) / determinant
-        val v = a.cross(q) / determinant
-        return targetLeft + (targetRight - targetLeft) * u + (targetHem - targetLeft) * v
+        val local=photoSurface.torsoLocal(source)
+        return rawTorso(local)
     }
     /** One continuous field for the entire photo grid. A shared source vertex
      * has exactly one destination on either side of an armhole. */
     fun surface(source: GPoint): GPoint = surface(photoSurface.sample(source))
 
-    fun surface(sample: PhotoSurface.Sample): GPoint {
+    private fun strength()=if(volumeStrength.isFinite())volumeStrength.coerceIn(0f,.25f) else 0f
+    fun bodySurface(sample:PhotoSurface.Sample):GPoint {
         val base=torso(sample.source)
-        val torso=fitCrossSection(base,sample.torsoCross,0)
+        return base+fitDelta(sample.torsoLocal,0)+(torso(sample.source+sample.torsoRoll)-base)*strength()
+    }
+    fun surface(sample: PhotoSurface.Sample,torso:GPoint=bodySurface(sample)): GPoint {
         var result=torso
-        var sleeveWeight=0f
         for((i,part) in spec.sleeves.withIndex()) {
             val weight=sample.weights[i]
             if(weight>0f) {
                 val partIndex=if(part.side=="left")leftIndex else rightIndex
                 val mapped=sleeve(sample.source,part)
-                val fitted=fitCrossSection(mapped,sample.sleeveCross[i],partIndex,part)
+                val fitted=mapped+fitDelta(sample.sleeveLocal[i],partIndex)*sleeveBlend(sample.source,part)+
+                    (sleeve(sample.source+sample.sleeveRoll[i],part)-mapped)*strength()
                 result+=(fitted-torso)*weight
-                sleeveWeight+=weight
             }
         }
-        val strength=if(volumeStrength.isFinite())volumeStrength.coerceIn(0f,.25f) else 0f
-        if(strength==0f)return result
-        // Volume changes only transverse interior coordinates, after boundary fit.
-        var curve=curveDelta(sample.torsoCross,null)*((1f-sleeveWeight)*sample.torsoFade)
-        for((i,part) in spec.sleeves.withIndex())if(sample.weights[i]>0f)
-            curve+=curveDelta(sample.sleeveCross[i],part)*sample.weights[i]
-        return result+curve*strength
+        return result
     }
 
-    private fun curveDelta(cross:PhotoSurface.Cross?,part:SleeveSpec?):GPoint {
-        cross ?: return GPoint(0f,0f)
-        val s=cross.unit.coerceIn(-1f,1f)
-        val sourceDelta=(cross.positive-cross.negative)*(.25f*s*(1f-s*s))
-        if(part==null)return torso(cross.center+sourceDelta)-torso(cross.center)
-        return sleeve(cross.center+sourceDelta,part)-sleeve(cross.center,part)
-    }
-
-    private fun fitCrossSection(base:GPoint,cross:PhotoSurface.Cross?,partIndex:Int,part:SleeveSpec?=null):GPoint {
-        cross ?: return base
-        val rows=sectionRows[partIndex].orEmpty()
-        if(rows.isEmpty())return base
-        val sourceNegative=cross.unit<0f
-        fun map(q:GPoint)=if(part==null)torso(q) else sleeve(q,part)
-        val edge=map(if(sourceNegative)cross.negative else cross.positive)
-        // Interpolate corrections; fade outside observed rows instead of extending
-        // an uncertain mask measurement to collar, cuff or hem.
-        var weighted=GPoint(0f,0f);var total=0f
-        for(row in rows) {
-            val offset=edge-row.center
-            val negative=offset.x*row.normal.x+offset.y*row.normal.y<0f
-            val observed=(if(negative)row.negative else row.positive) ?: continue
-            val normal=row.normal*(if(negative)-1f else 1f)
-            val fromCenter=edge-row.center
-            val expected=fromCenter.x*normal.x+fromCenter.y*normal.y
-            if(expected<1f)continue
-            val target=observed
-            // Preserve product proportions: this is a bounded refinement, not
-            // stretching the virtual garment to cover every pixel of old clothes.
-            val limit=(targetRight-targetLeft).length*(if(part==null).12f else .06f)
-            val correction=(target-expected).coerceIn(-limit,limit)
-            val fraction=if(part==null)cross.fraction else {
-                val shoulder=if(partIndex==leftIndex)targetLeft else targetRight
-                (map(cross.center)-shoulder).length/(pixel(partIndex+2)-shoulder).length.coerceAtLeast(1f)
-            }
-            val weight=smoothUnit(1f-abs(fraction-row.fraction)/.30f)
-            weighted+=normal*(correction*weight);total+=weight
+    private data class FitRow(val fraction:Float,val negative:GPoint,val positive:GPoint)
+    private val fittedRows:Map<Int,List<FitRow>> by lazy {
+        bodyEdges?.sections.orEmpty().groupBy { it.part }.mapValues { (index,rows) ->
+            val part=spec.sleeves.find { (if(it.side=="left")leftIndex else rightIndex)==index }
+            rows.mapNotNull { row ->
+                if(index!=0 && part==null)return@mapNotNull null
+                val fraction=if(part==null)row.fraction else row.fraction*
+                    (pixel(index+2)-(bodyEdges?.shoulder(index)?:pixel(index))).length/sleeveLength(part,index).coerceAtLeast(1f)
+                if(fraction<=.01f || fraction>=.99f)return@mapNotNull null
+                val cross=if(part==null)photoSurface.torsoCross(fraction) else photoSurface.sleeveCross(part,fraction)
+                cross ?: return@mapNotNull null
+                fun correction(q:GPoint):GPoint {
+                    val mapped=(if(part==null)torso(q) else sleeve(q,part))-row.center
+                    val signed=mapped.x*row.normal.x+mapped.y*row.normal.y
+                    val observed=(if(signed<0f)row.negative else row.positive)?:return GPoint(0f,0f)
+                    val x=if(part==null)photoSurface.torsoLocal(q).x else photoSurface.sleeveLocal(q,part).x
+                    if(abs(x)<.01f || abs(signed)<1f)return GPoint(0f,0f)
+                    val limit=(targetRight-targetLeft).length*(if(part==null).10f else .05f)
+                    val delta=(observed-abs(signed)).coerceIn(-limit,limit)*(if(signed<0f)-1f else 1f)
+                    return row.normal*(delta/abs(x))
+                }
+                FitRow(fraction,correction(cross.negative),correction(cross.positive))
+            }.sortedBy { it.fraction }
         }
-        if(total==0f)return base
-        val pin=if(part==null)smoothUnit(cross.fraction/.20f)*(1f-smoothUnit((cross.fraction-.8f)/.2f)) else 1f
-        return base+weighted*(minOf(1f,total)/total*abs(cross.unit).coerceIn(0f,1f)*pin)
+    }
+    private fun fitDelta(local:GPoint,index:Int):GPoint {
+        val rows=fittedRows[index].orEmpty()
+        if(rows.isEmpty() || local.y<=0f || local.y>=1f)return GPoint(0f,0f)
+        val zero=GPoint(0f,0f)
+        var a=FitRow(0f,zero,zero);var b=FitRow(1f,zero,zero)
+        for(row in rows) { if(row.fraction<=local.y)a=row else { b=row;break } }
+        val t=smoothUnit((local.y-a.fraction)/(b.fraction-a.fraction).coerceAtLeast(.001f))
+        val da=if(local.x<0f)a.negative else a.positive
+        val db=if(local.x<0f)b.negative else b.positive
+        return (da*(1f-t)+db*t)*abs(local.x)
+    }
+    private fun sleeveLength(part:SleeveSpec,index:Int):Float {
+        val start=bodyEdges?.shoulder(index)?:pixel(index)
+        val arm=pixel(index+2)-start
+        val wrist=points[index+4]
+        val forearm=if(wrist.finite&&wrist.visibility>=.3f&&wrist.presence>=.5f)pixel(index+4)-pixel(index+2) else arm
+        val scale=(targetRight-targetLeft).length/max(1f,(spec.rightShoulder-spec.leftShoulder).length)
+        return minOf((part.hem-part.shoulder).length*scale,arm.length+forearm.length)
+    }
+    private fun sleeveBlend(source:GPoint,part:SleeveSpec):Float {
+        val seam=part.armpit-part.shoulder
+        val determinant=seam.cross(part.hem-part.shoulder)
+        return if(abs(determinant)<1f)0f else smoothUnit(seam.cross(source-part.shoulder)/determinant)
     }
     fun sleeve(source: GPoint, sleeve: SleeveSpec): GPoint {
         val base = torso(source)
@@ -172,7 +201,7 @@ internal class GarmentWarp(
         val wrist = points[shoulderIndex+4]
         val forearm = if(wrist.finite && wrist.visibility>=.3f && wrist.presence>=.5f)
             pixel(shoulderIndex+4)-pixel(elbowIndex) else arm
-        val targetLength = minOf(sourceArm.length * shoulderScale, arm.length+forearm.length)
+        val targetLength = sleeveLength(sleeve,shoulderIndex)
         val denominator = sourceArm.x * sourceArm.x + sourceArm.y * sourceArm.y
         val q = source - sleeve.shoulder
         val u = (sourceArm.x*q.x + sourceArm.y*q.y)/denominator
@@ -186,11 +215,7 @@ internal class GarmentWarp(
             else pixel(elbowIndex)+axis*(distance-arm.length)
         val articulated = center + GPoint(-axis.y,axis.x)*(v*sourceArm.length*shoulderScale*orientation)
         // The shoulder-to-underarm seam stays exactly attached to the torso.
-        val seam = sleeve.armpit - sleeve.shoulder
-        val seamDistance = seam.cross(sourceArm)
-        if (abs(seamDistance) < 1f) return base
-        val t = (seam.cross(q) / seamDistance).coerceIn(0f, 1f)
-        val weight = t*t*(3f-2f*t)
+        val weight=sleeveBlend(source,sleeve)
         return base * (1f - weight) + articulated * weight
     }
 }
