@@ -31,7 +31,7 @@ internal class GarmentRenderAsset(val spec: GarmentRenderSpec?, val masked: Bitm
         }
         val warp = GarmentWarp(requireNotNull(spec), pose.points, pose.imageWidth, pose.imageHeight, mirror, pose.bodyEdges)
         val mapped = pieces.flatMap { piece -> piece.polygon.map {
-            if (piece.sleeve == null) warp.torso(it) else warp.sleeve(it, piece.sleeve)
+            warp.surface(it)
         } }
         if (mapped.isEmpty()) return null
         val l = mapped.minOf { it.x }; val r = mapped.maxOf { it.x }
@@ -129,27 +129,7 @@ internal class GarmentRenderAsset(val spec: GarmentRenderSpec?, val masked: Bitm
                 }
                 val masked = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
                 Canvas(masked).drawPath(outer, paint)
-                val torso = Path(outer)
-                for (sleeve in spec.sleeves) check(torso.op(path(sleeve.polygon), Path.Op.DIFFERENCE))
-                fun piece(region: Path, polygon: List<GPoint>, sleeve: SleeveSpec?): GarmentPiece? {
-                    val bounds = RectF(); region.computeBounds(bounds, true)
-                    if (bounds.isEmpty) return null
-                    val left = floor(bounds.left).coerceAtLeast(0f)
-                    val top = floor(bounds.top).coerceAtLeast(0f)
-                    val right = ceil(bounds.right).coerceAtMost(source.width.toFloat())
-                    val bottom = ceil(bounds.bottom).coerceAtMost(source.height.toFloat())
-                    if (right<=left || bottom<=top) return null
-                    val bitmap = Bitmap.createBitmap((right-left).toInt(), (bottom-top).toInt(), Bitmap.Config.ARGB_8888)
-                    Canvas(bitmap).apply { translate(-left, -top); drawPath(region, paint) }
-                    return GarmentPiece(bitmap, left, top, 1/sx, 1/sy, polygon, sleeve)
-                }
-                val pieces = mutableListOf<GarmentPiece>()
-                piece(torso, spec.outer, null)?.let(pieces::add)
-                for (sleeve in spec.sleeves) {
-                    val region = path(sleeve.polygon)
-                    check(region.op(outer, Path.Op.INTERSECT))
-                    piece(region, sleeve.polygon, sleeve)?.let(pieces::add)
-                }
+                val pieces = listOf(GarmentPiece(masked, 0f, 0f, 1/sx, 1/sy, spec.outer, null))
                 return GarmentRenderAsset(spec, masked, pieces)
             } finally { source.recycle() }
         }

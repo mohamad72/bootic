@@ -156,27 +156,18 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     final model = GarmentModelMetadata.isModel(garment?.tryOnJson ?? '')
         ? GarmentModelMetadata.parse(garment!.tryOnJson)
         : null;
-    final render = model == null
-        ? GarmentRenderMetadata.parse(garment?.tryOnJson ?? '')
-        : null;
-    final needsPhoto =
-        model == null || model.data['material']['mode'] == 'source';
-    final photo = needsPhoto ? _photoPath(garment) : null;
-    if (garment != null &&
-        ((render == null && model == null) ||
-            (photo == null &&
-                model?.data['material']['mode'] != 'procedural'))) {
+    final render = model != null
+        ? model.photoMetadata()
+        : GarmentRenderMetadata.parse(garment?.tryOnJson ?? '');
+    final photo = _photoPath(garment);
+    if (garment != null && (render == null || photo == null)) {
       await _bridge.setGarment(null);
       throw StateError(
         'JSON معتبر یا عکس اصلی این لباس موجود نیست؛ مشخصات و عکس روبرو را در فرم لباس تکمیل کنید.',
       );
     }
     if (!mounted || session != _session || !_running) return;
-    await _bridge.setGarment(
-      photo,
-      renderMetadata: render?.toNativeMap(),
-      model: model?.toNativeMap(),
-    );
+    await _bridge.setGarment(photo, renderMetadata: render?.toNativeMap());
     await _bridge.setGarmentGhost(_debugEnabled && _debugGhost);
     await _bridge.setPrice(
       garment?.effectivePrice == null

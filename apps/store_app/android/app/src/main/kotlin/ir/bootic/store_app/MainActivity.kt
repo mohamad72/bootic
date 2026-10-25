@@ -645,10 +645,10 @@ class MainActivity : FlutterActivity() {
             "front" to frontCamera, "mirror" to mirror, "poseVisible" to poseVisible,
             "effect" to sceneEffect.wireName, "gesture" to lastGestureLabel,
             "voting" to votingEnabled,
-            "renderer" to (if (renderAsset == null) "none" else if(renderAsset?.model != null) "parametric-3d-v1" else "metadata-mesh-v2"),
+            "renderer" to (if (renderAsset == null) "none" else if(renderAsset?.model != null) "parametric-3d-v1" else "photo-cloth-v1"),
             "modelKind" to (renderAsset?.model?.spec?.kind ?: "—"),
             "materialMode" to (renderAsset?.model?.spec?.mode ?: "photo"),
-            "modelTriangles" to (renderAsset?.model?.faces?.size ?: 0),
+            "modelTriangles" to (if(renderAsset != null)48*64*2 else 0),
             "shoulderDepth" to (observation?.let { o -> if(o.points.size>12) (o.points[11].z-o.points[12].z)*o.imageWidth else 0f } ?: 0f),
             "garmentWidth" to (garment?.width ?: 0), "garmentHeight" to (garment?.height ?: 0),
         ))
@@ -708,8 +708,8 @@ class MainActivity : FlutterActivity() {
         cameraExecutor.execute {
             try {
                 val file = path?.let { garmentFile(it) }
-                val asset = if(model != null) GarmentRenderAsset.model(model,file) else
-                    GarmentRenderAsset.load(requireNotNull(file), GarmentRenderSpec.fromMap(requireNotNull(metadata)))
+                val source = metadata ?: model?.get("source_metadata") as? Map<*, *>
+                val asset = GarmentRenderAsset.load(requireNotNull(file), GarmentRenderSpec.fromMap(requireNotNull(source)))
                 val decoded = asset.masked
                 runOnUiThread {
                     if (generation != garmentGeneration) {

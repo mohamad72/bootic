@@ -296,7 +296,7 @@ int runAiImportChecks() {
   );
   check(
     prompt.contains('left_sleeve_hem_center') &&
-        prompt.contains('source_metadata') &&
+        prompt.contains('outer_contour_px') &&
         prompt.contains(GarmentAiImport.schema),
     'Prompt omitted render/parser contract',
   );

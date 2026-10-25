@@ -83,6 +83,35 @@ internal class GarmentWarp(
         val v = a.cross(q) / determinant
         return targetLeft + (targetRight - targetLeft) * u + (targetHem - targetLeft) * v
     }
+    /** One continuous field for the entire photo grid. A shared source vertex
+     * has exactly one destination on either side of an armhole. */
+    fun surface(source: GPoint, lag: GPoint = GPoint(0f, 0f)): GPoint {
+        var result = torso(source)
+        for (part in spec.sleeves) result += sleeve(source, part) - torso(source)
+        val a = spec.rightShoulder - spec.leftShoulder
+        val b = spec.hem - spec.leftShoulder
+        val v = (a.cross(source-spec.leftShoulder)/a.cross(b)).coerceIn(0f,1f)
+        // A lifted arm pulls the surrounding underarm cloth continuously. The
+        // influence fades before collar/hem and is relative to this body's axes.
+        val down=targetHem-(targetLeft+targetRight)*.5f
+        val sourceWidth=(spec.rightShoulder-spec.leftShoulder).length
+        val pin=minOf((source-spec.leftShoulder).length,(source-spec.rightShoulder).length)
+            .div(max(1f,sourceWidth*.12f)).coerceIn(0f,1f)
+        for(part in spec.sleeves) {
+            val i=if(part.side=="left")leftIndex else rightIndex
+            val elbow=points[i+2]
+            if(!elbow.finite || elbow.visibility<.5f || elbow.presence<.5f)continue
+            val arm=pixel(i+2)-pixel(i)
+            val dot=(arm.x*down.x+arm.y*down.y)/max(1f,arm.length*down.length)
+            val lift=((.8f-dot)/1.8f).coerceIn(0f,1f)
+            val radius=max(1f,sourceWidth*.24f)
+            val distance=(source-part.armpit).length/radius
+            val falloff=kotlin.math.exp(-distance*distance*2f)*pin*(1f-v*v)
+            result-=down*(.06f*lift*falloff)
+        }
+        // Neck/shoulders are pinned; lower cloth follows with bounded inertia.
+        return result + lag * (v*v)
+    }
     fun sleeve(source: GPoint, sleeve: SleeveSpec): GPoint {
         val base = torso(source)
         val shoulderIndex = if (sleeve.side == "left") leftIndex else rightIndex
@@ -94,20 +123,28 @@ internal class GarmentWarp(
         val sourceArm = sleeve.hem - sleeve.shoulder
         if (arm.length < 1f || sourceArm.length < 1f) return base
         val shoulderScale = (targetRight - targetLeft).length / max(1f, (spec.rightShoulder - spec.leftShoulder).length)
-        val targetLength = minOf(sourceArm.length * shoulderScale, arm.length * 0.75f)
-        val destinationArm = arm * (targetLength / arm.length)
+        val wrist = points[shoulderIndex+4]
+        val forearm = if(wrist.finite && wrist.visibility>=.3f && wrist.presence>=.5f)
+            pixel(shoulderIndex+4)-pixel(elbowIndex) else arm
+        val targetLength = minOf(sourceArm.length * shoulderScale, arm.length+forearm.length)
         val denominator = sourceArm.x * sourceArm.x + sourceArm.y * sourceArm.y
         val q = source - sleeve.shoulder
         val u = (sourceArm.x*q.x + sourceArm.y*q.y)/denominator
         val v = sourceArm.cross(q)/denominator
         val orientation = if ((targetRight-targetLeft).cross(targetHem-targetLeft) *
             (spec.rightShoulder-spec.leftShoulder).cross(spec.hem-spec.leftShoulder) < 0f) -1f else 1f
-        val articulated = start + destinationArm*u + GPoint(-destinationArm.y, destinationArm.x)*(v*orientation)
+        val distance=(u*targetLength).coerceAtLeast(0f)
+        val along=if(distance<=arm.length)arm else forearm
+        val axis=along*(1f/max(1f,along.length))
+        val center=if(distance<=arm.length)start+axis*distance
+            else pixel(elbowIndex)+axis*(distance-arm.length)
+        val articulated = center + GPoint(-axis.y,axis.x)*(v*sourceArm.length*shoulderScale*orientation)
         // The shoulder-to-underarm seam stays exactly attached to the torso.
         val seam = sleeve.armpit - sleeve.shoulder
         val seamDistance = seam.cross(sourceArm)
         if (abs(seamDistance) < 1f) return base
-        val weight = (seam.cross(q) / seamDistance).coerceIn(0f, 1f)
+        val t = (seam.cross(q) / seamDistance).coerceIn(0f, 1f)
+        val weight = t*t*(3f-2f*t)
         return base * (1f - weight) + articulated * weight
     }
 }

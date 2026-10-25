@@ -115,6 +115,16 @@ class GarmentModelMetadata {
     return GarmentModelMetadata._(data);
   }
 
+  GarmentRenderMetadata photoMetadata() {
+    final source = data['source_metadata'];
+    if (source is! Map<String, dynamic>) {
+      throw const FormatException(
+        'این لباس فقط مدل پارامتری دارد؛ پرامپت جدید را با عکس اصلی اجرا و پاسخ را دوباره وارد کنید.',
+      );
+    }
+    return GarmentRenderMetadata.parse(jsonEncode(source))!;
+  }
+
   Map<String, Object?> toNativeMap() => {
     ...data,
     if (data['source_metadata'] != null)

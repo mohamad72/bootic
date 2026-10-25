@@ -927,13 +927,15 @@ class _GarmentEditorScreenState extends ConsumerState<GarmentEditorScreen> {
                           alignLabelWithHint: true,
                           counterText: '',
                           hintText:
-                              '{"schema_version":"bootic.garment-model/1", ...}',
+                              '{"schema_version":"bootic.garment-metadata/0.1", ...}',
                           errorMaxLines: 4,
                         ),
                         validator: (value) {
                           try {
                             if (GarmentModelMetadata.isModel(value ?? '')) {
-                              GarmentModelMetadata.parse(value!);
+                              GarmentModelMetadata.parse(
+                                value!,
+                              ).photoMetadata();
                             } else {
                               GarmentRenderMetadata.parse(value ?? '');
                             }

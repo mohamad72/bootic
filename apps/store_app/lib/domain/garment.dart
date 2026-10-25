@@ -86,7 +86,7 @@ class Garment {
   String? _checkRenderMetadata() {
     try {
       if (GarmentModelMetadata.isModel(tryOnJson)) {
-        GarmentModelMetadata.parse(tryOnJson);
+        GarmentModelMetadata.parse(tryOnJson).photoMetadata();
       } else {
         GarmentRenderMetadata.parse(tryOnJson);
       }

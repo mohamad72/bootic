@@ -3,7 +3,6 @@ import 'field_definition.dart';
 import 'garment.dart';
 import 'garment_ai_import.dart';
 import 'garment_render_metadata.dart';
-import 'garment_model_metadata.dart';
 
 /// A manual copy/paste workflow. No API keys, network calls or image uploads.
 class GarmentAiPrompt {
@@ -96,62 +95,39 @@ class GarmentAiPrompt {
         'rendering': {'mirror_texture_only_if_front_camera_is_mirrored': true},
       },
     };
-    final sourceTemplate = template['try_on'];
-    template['try_on'] = {
-      'schema_version': GarmentModelMetadata.schema,
-      'kind': 'top',
-      'shape': {
-        'length': 1.0,
-        'hem_width': 1.0,
-        'ease': 0.06,
-        'sleeve_length': 0.35,
-        'neck_width': 0.2,
-        'neck_depth': 0.14,
-        'neckline': 'round',
-      },
-      'material': {
-        'mode': 'procedural',
-        'base_color': '#EEE9DF',
-        'accent_color': '#202638',
-        'pattern': 'solid',
-        'pattern_scale': 0.05,
-        'pattern_duty': 0.25,
-        'weave': 'plain',
-        'orientation': 'horizontal',
-        'roughness': 0.85,
-      },
-      'source_metadata': null,
-    };
     const json = JsonEncoder.withIndent('  ');
-    return '''You are Bootic Parametric Garment and Catalog Extractor v2.
-Analyze ONE attached garment photo. Return ONE complete JSON object matching OUTPUT TEMPLATE. No markdown, executable code, URLs or base64.
+    return '''You are Bootic Photo Garment and Catalog Extractor v3.
+Analyze the ONE attached garment photograph. Return ONE JSON object only, matching OUTPUT TEMPLATE below. No prose, markdown, code fences, image generation, URLs or executable code.
 
-REFERENCE
-Echo photo_id exactly. Describe a reusable 3D garment, not the photograph's pose or folds. The app builds and caches a mesh once and animates it with the customer's body. Do not encode this customer's anatomy or a fixed pixel offset. This is approximate visual preview, not certified sizing or physical cloth simulation. The unseen back cannot be verified from one photo.
+WORKFLOW AND REFERENCE
+The operator will paste your response into Bootic to fill the catalog form AND supply live try-on geometry. The original photograph is the texture: do not generate a replacement image, crop it, trim its canvas, erase its background, mirror it or change its framing. The app masks ONLY from your polygons during rendering.
+Echo photo_id EXACTLY. Use the supplied coordinate_canvas dimensions in try_on.source. If the attached photograph is the same uncropped image at another resolution, map all coordinates proportionally onto coordinate_canvas. If it is a different photo, cropped, or contains multiple garments, ask for a correct single reference instead of fabricating usable geometry.
 
-CATALOG
-Use Persian descriptive values, exact category/audience enums and metadata keys/options from CURRENT CONTRACT. Unknown values MUST be null and preserve manual values. NEVER turn missing price/stock into zero. Price/discountPrice are integer TOMAN 0..999999999999; stock integer 0..999999; use only operator-supplied values or relevant readable labels. Do not guess fabric composition, physical millimetres, price, inventory, SKU or audience from a person's body. Keep operator values. Audience is a PRODUCT classification: men/women/girls/boys/unisex; unknown null. name <=120 characters; collection <=500; sku/barcode <=200. isActive boolean or null. measurements_mm chest WIDTH and length require verified calibration or explicit operator data, otherwise null.
-Metadata types: text <=500 chars, longText <=4000, integer, finite decimal, boolean, singleSelect exact option, multiSelect exact options <=100, date Gregorian YYYY-MM-DD, year 1900..2200, yearRange [min,max], numberRange [min,max], color #RRGGBB, score 0..1, tags <=20 strings each <=80. Unknown null. No extra fields.
+CATALOG RULES
+- Use Persian for descriptive text, but use EXACT machine keys for category and audience from the contract. null means unknown and preserves existing manual information. Do not convert unknown numbers to zero.
+- Give a short visible description as name. Fill metadata using ONLY enabled metadata_fields keys, declared types and exact listed option strings. No new fields or enum options. Describe visible pattern/color/style honestly; exact fabric composition requires a readable label or operator information.
+- Metadata types: text is a string up to 500 characters; longText up to 4000; integer is an integer; decimal a finite number; boolean true/false; singleSelect one exact listed option; multiSelect an array of exact listed options (at most 100); date ISO Gregorian YYYY-MM-DD; year an integer 1900..2200; yearRange [minYear,maxYear] in that range; numberRange [min,max]; color #RRGGBB; score a number 0..1; tags an array of at most 20 nonempty strings (at most 80 characters each). Use null for unknown, not empty strings or placeholders.
+- audience is a garment product category (men, women, girls, boys, unisex). Use explicit product information, a readable label or the operator's choice; when unclear use null. Do not infer the sex/gender/age of a person wearing the garment. Never use unisex as an unknown default.
+- price and discountPrice are WHOLE TOMAN amounts; stock is a whole nonnegative count. These, collection, sku, barcode, isActive and physical measurements are null unless explicitly supplied by the operator or clearly readable on the relevant label. Never estimate price, inventory or centimetres/millimetres from appearance. measurements_mm.chest is garment chest WIDTH, not circumference; length is garment length, both in millimetres. No physical measurement without supplied calibration/verified data.
+- Retain the operator_supplied_values. Do not replace known values with visual guesses. Unknown metadata values are null, including optional required fields that cannot be established; the operator will complete these in the form.
 
-MODEL
-kind must match catalog category: top/coat/dress/skirt/trousers. Shape values are bounded visual RATIOS, not real measurements:
-- length 0.6..2.2: upper-body garments as shoulder-to-hip ratio; skirt/trousers as hip-to-ankle fraction (normally <=1). Consider intended garment cut, never source canvas margins.
-- hem_width 0.65..1.8: hem width relative to garment shoulder width (or hip width for lower garments).
-- ease 0..0.25: additional width fraction, use conservative regular fit 0.06 unless visible cut says otherwise.
-- sleeve_length 0..1 of shoulder-to-wrist length: 0 sleeveless, around .3 short, .55 elbow, 1 full length. Applies only upper-body garments.
-- neck_width 0.12..0.32 of full shoulder width (half neck opening width); neck_depth 0.02..0.3 of torso length. neckline round/v; unsupported collars are approximate, do not promise exact reconstruction.
-material colors #RRGGBB approximate diffuse colors without baked lighting. roughness .3..1 controls surface sheen, .85 for matte fabric.
-Choose procedural for plain/repeating stripes/checks: pattern solid/stripes/checks; pattern_scale 0.005..0.15 is one FULL repeating period as a fraction of shoulder width; pattern_duty 0.05..0.95 is the fraction occupied by accent_color; orientation horizontal/vertical. Count actual repeat spacing relative to garment width and distinguish narrow dark lines from wider light gaps. weave plain/knit/denim describes visible surface structure approximately, not fiber composition; use plain when unclear. For simple patterns source_metadata MUST be null; no photo pixels are used live.
-Choose source for logos, complex prints, embroidery, irregular motifs that cannot be recreated by those patterns. Provide source_metadata using SOURCE GEOMETRY TEMPLATE below. Original photograph texture will be mapped onto a 3D surface. One photo cannot reveal unseen surfaces; do not invent back details. Never erase/trim/mirror the source or generate a replacement image.
+GEOMETRY RULES
+1. Preserve the source pixels and canvas. Pixel origin is top-left; x increases right, y increases down. ALL points use coordinate_canvas, must be finite and inside its bounds. Image-left/right are NOT anatomical left/right. Never mirror the source landmarks.
+2. Trace outer_contour_px clockwise around ONLY the garment. Use 3..1024 vertices, with more near neck/cuffs/armpits/hem; avoid self intersections and degenerate shapes. Do not include floor, hanger, hands, skin or background.
+3. subtract_polygons_px is an object of named removal polygons (3..1024 points each, at most 16). Subtract internal empty regions. For front-view shirts, also remove the visible REAR panel, tag and back neck binding inside the neck opening, keeping the real FRONT collar band. Preserve graphics, logos, stripes, seams, cuffs, buttons and all real front-facing garment texture. Use {} when there are no holes.
+4. Source shoulder_image_left and shoulder_image_right are the upper shoulder seam/sleeve-root attachment points on the garment, not rectangle corners or armpits. hem_center is the middle of the torso's lower hem, not the middle of the photograph. These three anchors must not be collinear.
+5. Annotate torso and each VISIBLE sleeve separately with polygon_px. Sleeve polygons touch the torso at their actual shoulder-to-armpit seam. Supply left_armpit/right_armpit and left_sleeve_hem_center/right_sleeve_hem_center for the respective sleeve. Sleeve hem_center is the centre of its CUFF opening, not its outermost tip. The renderer uses these exact keys.
+6. Omit a nonexistent/hidden optional sleeve region and its optional landmarks instead of inventing points. Do not put [0,0] placeholders in actual output. For sleeveless garments omit both sleeve regions. Required outer contour and shoulder/hem anchors must be genuine observations. If these cannot be established, request a clearer front photo instead of inventing geometry.
+7. The current renderer attaches torso to shoulders/hips and sleeves towards elbows with a 2D mesh. Do not claim exact 3D drape, true size fit, unseen back/side reconstruction, or foreground occlusion. Do not add unsupported instructions or pretend they execute. Geometry is approximate, to be verified in live debug.
+8. Validate coordinates, anchors, polygons, field types and option values before answering. No alpha bitmap/base64/RLE arrays. Return the complete object, not a patch or a string containing JSON.
 
-SOURCE GEOMETRY (only for source material)
-Use coordinate_canvas pixel dimensions exactly, map proportionally if same uncropped photo was resized. If different/cropped/multiple garments ask for a single correct reference. Trace clockwise outer_contour_px around garment only; 3..1024 finite in-bounds points per polygon. subtract_polygons_px <=16 named polygons excludes neck openings/back-neck tag/visible rear panel without deleting front collar. No background/hanger/skin. shoulder_image_left/right are upper shoulder seam roots; hem_center is torso hem middle. Those three must be noncollinear. Annotate torso and each visible sleeve polygon separately; each sleeve needs corresponding armpit and left_sleeve_hem_center/right_sleeve_hem_center at cuff opening centre. Omit nonexistent sleeves and their optional anchors. No [0,0] placeholders. Image-left/right, never anatomical sides. Texture projection is approximate and cannot recover unseen surfaces.
-${json.convert(sourceTemplate)}
+PHOTO QUALITY
+Keep exact product colors, prints, front collar and sleeve edges. Do not synthesize cylinders, a parametric model, new folds, shadows or unseen back surfaces. A flat, evenly lit reference is preferred: source shadows and folds remain in its texture. Trace the FRONT neck opening, excluding visible back-neck panel/tag but preserving front collar trim. Sleeve shoulder-to-armpit boundaries must meet the torso exactly, without gaps or overlap.
 
 CURRENT CONTRACT
 ${json.convert(contract)}
 
-OUTPUT TEMPLATE (replace observed appearance; keep unknown commercial values null)
+OUTPUT TEMPLATE (replace all placeholder coordinates and fill observed values; keep unknown catalog values null)
 ${json.convert(template)}
 ''';
   }

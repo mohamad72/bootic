@@ -76,8 +76,16 @@ void main() {
     GarmentModelMetadata.parse(jsonEncode(m)).toNativeMap()['kind'] == 'top',
     'Native contract',
   );
+  final photoGeometry = jsonDecode(
+    File('test/fixtures/striped_tshirt_metadata.json').readAsStringSync(),
+  );
+  final procedural = blank.copyWith(tryOnJson: jsonEncode(m));
+  check(
+    procedural.renderMetadataError != null,
+    'Procedural-only entries need photo geometry',
+  );
   final published = blank.copyWith(
-    tryOnJson: jsonEncode(m),
+    tryOnJson: jsonEncode(photoGeometry),
     isDraft: false,
     photos: {'front': 'a.png', 'front_source': 'a.png'},
   );
@@ -136,13 +144,13 @@ void main() {
       'metadata': <String, dynamic>{},
       'measurements_mm': <String, dynamic>{},
     },
-    'try_on': modelFixture(),
+    'try_on': photoGeometry,
   };
   GarmentAiImport parse() => GarmentAiImport.parse(
     jsonEncode(payload),
     photoId: 'ref.png',
-    width: 512,
-    height: 768,
+    width: 1152,
+    height: 1536,
     fields: [],
   );
   final applied = parse().applyTo(blank);
@@ -150,6 +158,13 @@ void main() {
   (sourceModel['material'] as Map)['mode'] = 'source';
   sourceModel['source_metadata'] = jsonDecode(
     File('test/fixtures/striped_tshirt_metadata.json').readAsStringSync(),
+  );
+  check(
+    GarmentModelMetadata.parse(
+          jsonEncode(sourceModel),
+        ).photoMetadata().toNativeMap()['schema'] ==
+        'bootic.garment-metadata/0.1',
+    'Legacy source photo conversion',
   );
   check(
     (GarmentModelMetadata.parse(
@@ -195,14 +210,14 @@ void main() {
     parse().applyTo(blank).stock == 0 && parse().applyTo(blank).price == 0,
     'AI zero',
   );
-  (payload['garment'] as Map)['category'] = 'skirt';
+  payload['try_on'] = modelFixture();
   var mismatch = false;
   try {
     parse().applyTo(blank);
   } on FormatException {
     mismatch = true;
   }
-  check(mismatch, 'Category mismatch');
+  check(mismatch, 'Procedural rendering must be rejected');
   final prompt = GarmentAiPrompt.build(
     photoId: 'ref.png',
     width: 512,
@@ -210,13 +225,13 @@ void main() {
     fields: [],
   );
   check(
-    prompt.contains(GarmentModelMetadata.schema) &&
+    !prompt.contains(GarmentModelMetadata.schema) &&
         prompt.contains(GarmentAiImport.schema),
     'Prompt schema',
   );
   check(
-    prompt.contains('source_metadata') &&
-        prompt.contains('NEVER turn missing price/stock into zero'),
+    prompt.contains('outer_contour_px') &&
+        prompt.contains('Do not convert unknown numbers to zero'),
     'Prompt null instructions',
   );
   check(jsonEncode(blank.toJson()).contains('"price":null'), 'Payload null');

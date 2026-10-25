@@ -141,9 +141,6 @@ class GarmentAiImport {
     final model = GarmentModelMetadata.isModel(renderJson)
         ? GarmentModelMetadata.parse(renderJson)
         : null;
-    if (root['schema_version'] == schema && model == null) {
-      throw const FormatException('پرامپت جدید به مدل سه‌بعدی نیاز دارد');
-    }
     if (model == null) GarmentRenderMetadata.parse(renderJson);
     final sourceRender = model == null ? render : model.data['source_metadata'];
     if (sourceRender != null) {
