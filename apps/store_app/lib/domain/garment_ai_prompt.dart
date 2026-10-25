@@ -78,6 +78,10 @@ class GarmentAiPrompt {
             ],
           },
           'sleeve_image_left': {
+            'cuff_edge_px': [
+              [0, 0],
+              [0, 0],
+            ],
             'polygon_px': [
               [0, 0],
               [0, 0],
@@ -85,6 +89,10 @@ class GarmentAiPrompt {
             ],
           },
           'sleeve_image_right': {
+            'cuff_edge_px': [
+              [0, 0],
+              [0, 0],
+            ],
             'polygon_px': [
               [0, 0],
               [0, 0],
@@ -96,7 +104,7 @@ class GarmentAiPrompt {
       },
     };
     const json = JsonEncoder.withIndent('  ');
-    return '''You are Bootic Photo Garment and Catalog Extractor v3.
+    return '''You are Bootic Photo Garment and Catalog Extractor v4.
 Analyze the ONE attached garment photograph. Return ONE JSON object only, matching OUTPUT TEMPLATE below. No prose, markdown, code fences, image generation, URLs or executable code.
 
 WORKFLOW AND REFERENCE
@@ -116,13 +124,18 @@ GEOMETRY RULES
 2. Trace outer_contour_px clockwise around ONLY the garment. Use 3..1024 vertices, with more near neck/cuffs/armpits/hem; avoid self intersections and degenerate shapes. Do not include floor, hanger, hands, skin or background.
 3. subtract_polygons_px is an object of named removal polygons (3..1024 points each, at most 16). Subtract internal empty regions. For front-view shirts, also remove the visible REAR panel, tag and back neck binding inside the neck opening, keeping the real FRONT collar band. Preserve graphics, logos, stripes, seams, cuffs, buttons and all real front-facing garment texture. Use {} when there are no holes.
 4. Source shoulder_image_left and shoulder_image_right are the upper shoulder seam/sleeve-root attachment points on the garment, not rectangle corners or armpits. hem_center is the middle of the torso's lower hem, not the middle of the photograph. These three anchors must not be collinear.
-5. Annotate torso and each VISIBLE sleeve separately with polygon_px. Sleeve polygons touch the torso at their actual shoulder-to-armpit seam. Supply left_armpit/right_armpit and left_sleeve_hem_center/right_sleeve_hem_center for the respective sleeve. Sleeve hem_center is the centre of its CUFF opening, not its outermost tip. The renderer uses these exact keys.
+5. Annotate torso and each VISIBLE sleeve separately with polygon_px. Trace the attachment seam from its visible TOP endpoint on the shoulder silhouette to the underarm junction; copy EXACTLY the same seam vertices into torso and sleeve polygons, in reverse order when necessary. shoulder_image_left/right must equal that seam's TOP endpoint, not a point partway down the seam. left_armpit/right_armpit must equal its BOTTOM endpoint. Shared boundaries must not drift, overlap or leave a gap.
+5a. For every completely visible sleeve, supply regions.sleeve_image_left/right.cuff_edge_px as the TWO observed endpoints of the cuff opening, each also a vertex of that sleeve polygon on its outer contour. This is the opening across sleeve width, not the sleeve attachment seam or two points along one side. The app computes the cuff centre from these two endpoints. Set left_sleeve_hem_center/right_sleeve_hem_center to their arithmetic midpoint as well. Never substitute the outermost sleeve tip or the image border for the cuff centre. For endpoints [x1,y1] and [x2,y2], the centre is [(x1+x2)/2,(y1+y2)/2]. Old references without cuff_edge_px are supported, but new complete references must include it.
 6. Omit a nonexistent/hidden optional sleeve region and its optional landmarks instead of inventing points. Do not put [0,0] placeholders in actual output. For sleeveless garments omit both sleeve regions. Required outer contour and shoulder/hem anchors must be genuine observations. If these cannot be established, request a clearer front photo instead of inventing geometry.
 7. The renderer fits the original photo mesh to pose and trustworthy external person-mask boundaries. It adds only small, smooth edge roll bands at the torso sides, sleeve sides and shoulder tops; the lower hem stays free of roll. Supply observed flat source geometry only: never shrink corners, pre-bend coordinates or invent folds to simulate volume. The app performs the edge roll. Do not claim exact 3D drape, true size fit or unseen back/side reconstruction. Do not add unsupported instructions or pretend they execute. Geometry is approximate, to be verified in source preview and live boundary diagnostics.
 8. Validate coordinates, anchors, polygons, field types and option values before answering. No alpha bitmap/base64/RLE arrays. Return the complete object, not a patch or a string containing JSON.
 
 PHOTO QUALITY
 Keep exact product colors, prints, front collar and sleeve edges. Do not synthesize cylinders, a parametric model, new folds, shadows or unseen back surfaces. Use a flat reference under diffuse even light, with exposure and white balance similar to the live fitting area: source shadows and folds remain in its texture. Trace the FRONT neck opening, excluding visible back-neck panel/tag but preserving front collar trim. Sleeve shoulder-to-armpit boundaries must meet the torso exactly, without gaps or overlap. Torso and sleeve polygons must describe their real regions rather than overlapping large parts of the garment.
+The complete silhouette, both cuff openings and lower hem must fit inside the photograph with a small background margin. If the garment is clipped at the image edge, do not invent the missing cuff or treat that edge as its centre; request a complete reference. Use a nearly overhead front photograph with the garment laid flat, shoulders level and both sleeves spread naturally. Trace the actual cloth/background silhouette, not shadows, interior creases or print boundaries. Prefer a concise set of meaningful contour vertices over pixel-scale zigzags. Do not straighten a crooked reference by moving its coordinates away from the source pixels: the photograph itself must be improved when it contains perspective distortion or folds.
+
+FINAL GEOMETRY SELF-CHECK
+Before returning JSON, verify that each cuff centre equals its two cuff endpoints' midpoint; the shoulder and armpit equal the attachment seam endpoints; every shared seam vertex is identical in both adjoining regions; torso/sleeve interiors do not overlap; all outer and cuff vertices remain on the observed silhouette; the front collar opening is not overcut. Preserve left/right asymmetry actually visible in the source. Do not claim that a prompt can remove photographed folds or recover a missing clipped garment edge.
 
 CURRENT CONTRACT
 ${json.convert(contract)}

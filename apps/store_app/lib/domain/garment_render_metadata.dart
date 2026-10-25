@@ -106,15 +106,35 @@ class GarmentRenderMetadata {
       final value = regions['sleeve_image_$side'];
       if (value == null) continue;
       final region = object(value, 'sleeve_image_$side');
+      final cuffEdge = region['cuff_edge_px'];
+      List<double> hem;
+      if (cuffEdge != null) {
+        if (cuffEdge is! List || cuffEdge.length != 2) {
+          throw FormatException(
+            'لبهٔ سرآستین $side باید دقیقاً دو نقطه داشته باشد',
+          );
+        }
+        final a = point(cuffEdge[0], '$side.cuff_edge_px[0]');
+        final b = point(cuffEdge[1], '$side.cuff_edge_px[1]');
+        final dx = b[0] - a[0], dy = b[1] - a[1];
+        if (dx * dx + dy * dy < 1) {
+          throw FormatException('دو گوشهٔ سرآستین $side باید از هم جدا باشند');
+        }
+        // The observed opening is authoritative; an old generated tip must not
+        // rotate and shorten the sleeve by being mistaken for its centre.
+        hem = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      } else {
+        hem = point(
+          landmarks['${side}_sleeve_hem_center'],
+          '${side}_sleeve_hem_center',
+        );
+      }
       sleeves.add({
         'side': side,
         'polygon': polygon(region['polygon_px'], 'sleeve_image_$side'),
         'shoulder': anchors['shoulder_image_$side'],
         'armpit': point(landmarks['${side}_armpit'], '${side}_armpit'),
-        'hem': point(
-          landmarks['${side}_sleeve_hem_center'],
-          '${side}_sleeve_hem_center',
-        ),
+        'hem': hem,
       });
     }
     final rendering = root['rendering'] == null
