@@ -34,3 +34,20 @@ node --input-type=module -e "import('./apps/web_tryon/tests/geometry.test.mjs').
 ```
 
 Tests cover background removal, alpha holes, contour coordinates, input validation, pinned anchors, finite grid vertices and topology safety. Browser QA covers source/fitting tabs and visual alignment. App live camera/FPS/Android output remains unverified by this lab.
+
+## Expanded anchors and round collar
+
+The shared numbering now includes 16 fixed-person markers and 14 garment markers:
+
+- 1/2 shoulder corners; 3 hem centre; 4/5 cuff centres.
+- 6/7 wrist guides appear only on the person.
+- 8/9 upper sleeve insertion starts; 10/11 underarm junctions.
+- 12/13 lower hem corners; 14/15 collar corners; 16 front collar depth.
+
+Select a point from the dropdown when markers are close; drag it or enter X/Y and press **اعمال مختصات** (or Enter). Body points are manually annotated. Missing legacy garment points are explicitly marked as suggestions; the upload does not magically run a garment-landmark model. Existing cuff edges remain authoritative for their midpoint. The two underarm controls refer to the visible garment armhole junction and a chosen body attachment target, not measured hidden anatomy.
+
+The optional parabolic round-neck cut is a 64-segment quadratic through both ends and the depth marker; it is recomputed in the actual mask and exported as an ordinary polygon usable by Android's metadata parser. The depth marker is the local collar-frame depth: tilted/asymmetric collar endpoints can shift the lowest image-space sample. This is an approximation for a round neckline, not a claim that every neckline/neck is a parabola. V/square necklines should retain their imported polygon. Switching to polygon preserves the currently sampled opening. A prior named/overlapping collar hole is replaced; unrelated holes remain.
+
+Extra anchors drive a bounded local fitting field. When target positions would invert mesh triangles, fitting is attenuated. Yellow filled circles are requested destinations; cyan hollow circles and dashed residuals show where the rendered mesh actually maps each source anchor. The two may differ when constrained.
+
+The **کپی پرامپت هوش مصنوعی** control supplies the complete data contract and all 14 garment-point names. The same reusable prompt is available at `assets/garment-landmarks-prompt.txt`. It asks the external AI to identify uncertainty instead of hallucinating hidden points. Responses flagged `review_required` or containing unknown coordinates require correction before import. This tool does not send the photograph to an AI service.

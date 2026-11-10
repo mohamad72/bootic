@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {ANCHORS, enrichMetadata, neckCurve, buildPrompt, applyNeck} from '../anchors.mjs';
+import {sampleMetadata, validateMetadata, project} from '../geometry.mjs';
+export function runTests(){
+ const m=enrichMetadata(sampleMetadata());
+ assert.equal(ANCHORS.length,16);
+ for(const k of ['left_armpit','right_armpit','left_hem','right_hem','neck_image_left','neck_image_right','front_collar_bottom','left_sleeve_start','right_sleeve_start'])assert(Array.isArray(m.landmarks_px[k]),k);
+ const curve=neckCurve([20,10],[80,10],[50,40]);
+ assert.deepEqual(curve[0],[20,10]);assert.deepEqual(curve.at(-1),[80,10]);
+ assert.deepEqual(curve[(curve.length-1)/2],[50,40]);
+ assert(curve[8][1]>10&&curve[8][1]<40);
+ const cuff=sampleMetadata();delete cuff.landmarks_px.left_sleeve_hem_center;
+ cuff.regions.sleeve_image_left.cuff_edge_px=[[50,200],[80,260]];
+ const cuffCentre=enrichMetadata(cuff).landmarks_px.left_sleeve_hem_center;assert.equal(cuffCentre[0],65);assert.equal(cuffCentre[1],230);
+ const namedHole=sampleMetadata();namedHole.segmentation.subtract_polygons_px={hole_0:namedHole.segmentation.subtract_polygons_px.neck,chest:[[280,300],[320,300],[320,330],[280,330]]};
+ applyNeck(namedHole);assert.equal(Object.keys(namedHole.segmentation.subtract_polygons_px).length,2);
+ assert(namedHole.segmentation.subtract_polygons_px.chest);
+ const s=validateMetadata(m);assert(s.holes.some(p=>p.length>32));
+ assert.equal(s.landmarks.left_armpit[0],180);
+ const legacy=sampleMetadata();delete legacy.landmarks_px.neck_image_left;delete legacy.web_lab;validateMetadata(legacy);
+ const prompt=buildPrompt(600,700);
+ for(const a of ANCHORS.filter(a=>a.source))assert(prompt.includes(a.source),a.source);
+ assert(prompt.includes('null'));assert(prompt.includes('bootic.garment-metadata/0.1'));
+ const body={left:[260,230],right:[440,230],hem:[350,450],elbowLeft:[215,335],elbowRight:[485,335],wristLeft:[175,435],wristRight:[525,435]};
+ const baseline=project(s,body);
+ for(const a of ANCHORS)if(a.source&&s.landmarks[a.source]&&!body[a.key])body[a.key]=baseline.map(s.landmarks[a.source]);
+ const before=project(s,body);const changed=structuredClone(body);changed.hemLeft[0]-=15;
+ const after=project(s,changed);
+ assert(after.map(s.landmarks.left_hem)[0]<before.map(s.landmarks.left_hem)[0]);
+ assert(after.vertices.every(p=>p.every(Number.isFinite)));
+ const invalid=structuredClone(m);invalid.landmarks_px.front_collar_bottom=[300,20];
+ assert.throws(()=>validateMetadata(invalid));
+ return 'Anchor, collar, prompt, legacy and local-fit checks passed';
+}

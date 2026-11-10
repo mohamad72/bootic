@@ -1,3 +1,4 @@
+import {ANCHORS, applyNeck, enrichMetadata} from './anchors.mjs';
 // Browser-independent geometry. Source coordinates are never trimmed.
 export const add=(a,b)=>[a[0]+b[0],a[1]+b[1]];
 export const sub=(a,b)=>[a[0]-b[0],a[1]-b[1]];
@@ -47,6 +48,7 @@ export function traceMask(mask,w,h){
 }
 export function validateMetadata(m){
   if(m?.schema_version!=='bootic.garment-metadata/0.1')throw Error('نسخهٔ JSON باید bootic.garment-metadata/0.1 باشد.');
+  m=applyNeck(structuredClone(m));
   const width=m.source?.width_px,height=m.source?.height_px;
   if(![width,height].every(n=>Number.isFinite(n)&&n>=64&&n<=6000))throw Error('ابعاد JSON باید بین ۶۴ و ۶۰۰۰ باشد.');
   if(m.source.points_convention!=='image_left/image_right; not anatomical left/right')throw Error('قرارداد مختصات JSON سازگار نیست.');
@@ -56,15 +58,17 @@ export function validateMetadata(m){
   if(Math.abs(cross(sub(right,left),sub(hem,left)))<1)throw Error('سه اتصال لباس نباید هم‌خط باشند.');
   const holes=Object.values(m.segmentation?.subtract_polygons_px??{});if(holes.length>16)throw Error('تعداد حفره‌ها زیاد است.');
   const sleeves=[];for(const side of ['left','right']){const r=m.regions?.[`sleeve_image_${side}`];if(!r)continue;const cuff=r.cuff_edge_px;if(cuff&&(!Array.isArray(cuff)||cuff.length!==2))throw Error('سرآستین نامعتبر است.');sleeves.push({side,polygon:polygon(r.polygon_px),shoulder:side==='left'?left:right,armpit:point(l[`${side}_armpit`]),hem:cuff?mul(add(point(cuff[0]),point(cuff[1])),.5):point(l[`${side}_sleeve_hem_center`])});}
-  return {width,height,outer:polygon(m.segmentation?.outer_contour_px),holes:holes.map(polygon),left,right,hem,sleeves};
+  const landmarks={};for(const a of ANCHORS)if(a.source&&l[a.source]!==undefined)landmarks[a.source]=point(l[a.source]);
+  return {width,height,outer:polygon(m.segmentation?.outer_contour_px),holes:holes.map(polygon),left,right,hem,sleeves,landmarks};
 }
-export function sampleMetadata(){return {
+export function sampleMetadata(){return applyNeck(enrichMetadata({
   schema_version:'bootic.garment-metadata/0.1',
   source:{width_px:600,height_px:700,points_convention:'image_left/image_right; not anatomical left/right'},
-  segmentation:{outer_contour_px:[[185,100],[240,85],[300,120],[360,85],[415,100],[570,210],[490,320],[420,275],[420,620],[180,620],[180,275],[110,320],[30,210]],subtract_polygons_px:{neck:[[240,85],[300,120],[360,85],[340,150],[260,150]]}},
-  landmarks_px:{shoulder_image_left:[185,100],shoulder_image_right:[415,100],hem_center:[300,620],left_armpit:[180,275],right_armpit:[420,275],left_sleeve_hem_center:[70,265],right_sleeve_hem_center:[530,265]},
+  segmentation:{outer_contour_px:[[185,100],[240,85],[360,85],[415,100],[570,210],[490,320],[420,275],[420,620],[180,620],[180,275],[110,320],[30,210]],subtract_polygons_px:{neck:[[240,85],[300,120],[360,85],[340,150],[260,150]]}},
+  landmarks_px:{shoulder_image_left:[185,100],shoulder_image_right:[415,100],hem_center:[300,620],left_armpit:[180,275],right_armpit:[420,275],left_sleeve_hem_center:[70,265],right_sleeve_hem_center:[530,265],left_sleeve_start:[168,125],right_sleeve_start:[432,125],left_hem:[180,620],right_hem:[420,620],neck_image_left:[240,85],neck_image_right:[360,85],front_collar_bottom:[300,155]},
   regions:{sleeve_image_left:{polygon_px:[[185,100],[180,275],[110,320],[30,210]]},sleeve_image_right:{polygon_px:[[415,100],[570,210],[490,320],[420,275]]}},
-};}
+web_lab:{neckline:'parabola',inferred_points:[]},
+}));}
 // Anchored torso and blended articulated sleeves. This is a web diagnostic
 // implementation, NOT the full Kotlin PhotoSurface roll/body-edge fitting path.
 function polygonDistance(p,poly){let min=Infinity,a=poly.at(-1);for(const b of poly){const d=sub(b,a),q=sub(p,a),t=clamp((q[0]*d[0]+q[1]*d[1])/Math.max(.0001,d[0]**2+d[1]**2));min=Math.min(min,len(sub(p,add(a,mul(d,t)))));a=b;}return min;}
@@ -82,16 +86,36 @@ export function project(spec,body,columns=48,rows=64){
   const raw=p=>{const base=torso(p);let result=[...base],total=0;const deltas=[];
     for(const s of spec.sleeves){const regionWeight=contains(p,s.polygon)?1:1-smooth(polygonDistance(p,s.polygon)/Math.max(1,len(across)*.25));if(regionWeight===0)continue;
       const seam=sub(s.armpit,s.shoulder),arm=sub(s.hem,s.shoulder),d=cross(seam,arm);if(Math.abs(d)<1)continue;
-      const weight=regionWeight*smooth(cross(seam,sub(p,s.shoulder))/d),start=body[s.side],elbow=body[s.side==='left'?'elbowLeft':'elbowRight'],wrist=body[s.side==='left'?'wristLeft':'wristRight'];
+      const weight=regionWeight*smooth(cross(seam,sub(p,s.shoulder))/d),start=body[s.side==='left'?'sleeveStartLeft':'sleeveStartRight']??body[s.side],elbow=body[s.side==='left'?'elbowLeft':'elbowRight'],wrist=body[s.side==='left'?'wristLeft':'wristRight'];
       const a=sub(elbow,start),f=sub(wrist,elbow),scale=len(targetAcross)/Math.max(1,len(across)),length=Math.min(len(arm)*scale,len(a)+len(f));
       const q=sub(p,s.shoulder),u=(arm[0]*q[0]+arm[1]*q[1])/(len(arm)**2),v=cross(arm,q)/(len(arm)**2),distance=Math.max(0,u*length),axis=mul(distance<=len(a)?a:f,1/Math.max(1,len(distance<=len(a)?a:f)));
       const center=distance<=len(a)?add(start,mul(axis,distance)):add(elbow,mul(axis,distance-len(a)));
-      const mapped=add(center,mul([-axis[1],axis[0]],v*len(arm)*scale));deltas.push([sub(mapped,base),weight]);total+=weight;
+      const cuff=body[s.side==='left'?'cuffLeft':'cuffRight'];
+      const cuffCenter=cuff?add(start,mul(sub(cuff,start),u)):center;
+      const cuffAxis=cuff?mul(sub(cuff,start),1/Math.max(1,len(sub(cuff,start)))):axis;
+      const mapped=add(cuffCenter,mul([-cuffAxis[1],cuffAxis[0]],v*len(arm)*scale));deltas.push([sub(mapped,base),weight]);total+=weight;
     }
     for(const [d,w] of deltas)result=add(result,mul(d,w/Math.max(1,total)));return result;
   };
+  // Compact inverse-distance residual field: extra collar/hem/underarm anchors
+  // affect local fitting, rather than being decorative dots. The safety guard
+  // below can attenuate an impossible placement; diagnostics show the residual.
+  const controls=[];
+  for(const a of ANCHORS){
+    const source=a.source&&spec.landmarks?.[a.source],target=body[a.key];
+    if(source&&target)controls.push({source,delta:sub(target,raw(source))});
+  }
+  const adjusted=p=>{
+    const base=raw(p);if(!controls.length)return base;
+    let total=1/Math.max(1,len(across)*.25)**4,delta=[0,0];
+    for(const c of controls){const d2=len(sub(p,c.source))**2;
+      const w=Math.exp(-d2/Math.max(1,len(across)*.65)**2)/(d2+1)**2;
+      delta=add(delta,mul(c.delta,w));total+=w;
+    }
+    return add(base,mul(delta,1/total));
+  };
   const sources=[],vertices=[],reference=[],triangles=[];
-  for(let y=0;y<=rows;y++)for(let x=0;x<=columns;x++){const p=[spec.width*x/columns,spec.height*y/rows];sources.push(p);vertices.push(raw(p));reference.push(torso(p));}
+  for(let y=0;y<=rows;y++)for(let x=0;x<=columns;x++){const p=[spec.width*x/columns,spec.height*y/rows];sources.push(p);vertices.push(adjusted(p));reference.push(torso(p));}
   const visible=p=>contains(p,spec.outer)&&!spec.holes.some(h=>contains(p,h));
   function include(ids){const center=mul(ids.reduce((p,i)=>add(p,sources[i]),[0,0]),1/3);if(ids.some(i=>visible(sources[i]))||visible(center))triangles.push(ids);}
   for(let y=0;y<rows;y++)for(let x=0;x<columns;x++){const a=y*(columns+1)+x,b=a+1,c=a+columns+1,d=c+1;include([a,b,c]);include([b,d,c]);}

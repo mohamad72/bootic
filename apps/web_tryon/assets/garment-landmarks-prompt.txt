@@ -1,0 +1,66 @@
+Analyze the attached ORIGINAL garment photograph for a virtual try-on tool. Return ONLY one valid JSON object, no markdown. Do not edit or crop the photo.
+Use original image pixels: origin top-left, x right, y down. Left/right ALWAYS means IMAGE-left/image-right. Read the actual image resolution; never invent it. Current canvas ? x ? is a hint only: verify it against the attached file.
+Find the outer silhouette, ALL neck/cutout holes and these 14 garment landmarks:
+1. shoulder_image_left: گوشهٔ شانه چپ
+2. shoulder_image_right: گوشهٔ شانه راست
+3. hem_center: وسط پایین لباس
+4. left_sleeve_hem_center: انتهای آستین چپ
+5. right_sleeve_hem_center: انتهای آستین راست
+8. left_sleeve_start: بالای ابتدای آستین چپ
+9. right_sleeve_start: بالای ابتدای آستین راست
+10. left_armpit: زیر بغل چپ
+11. right_armpit: زیر بغل راست
+12. left_hem: گوشهٔ پایین چپ
+13. right_hem: گوشهٔ پایین راست
+14. neck_image_left: گوشهٔ یقه چپ
+15. neck_image_right: گوشهٔ یقه راست
+16. front_collar_bottom: پایین‌ترین نقطهٔ یقه
+Definitions: shoulder corners are the outer torso/shoulder corners. Sleeve-start points are the TOP sleeve insertion/seam starts, separate from cuff centres. Armpits are the lower armhole/torso-sleeve junctions (left_armpit and right_armpit); do not confuse them with the shoulder or elbow. Cuffs are the centres of sleeve openings. Hem points are left corner, centre and right corner of the bottom edge. Collar corners are the two neck-opening endpoints at the shoulder/neck junction; front_collar_bottom is the deepest visible FRONT collar point. Do NOT include wrists: IDs 6 and 7 are body-only guides.
+For a round neckline approximate the opening by a smooth quadratic/parabolic U through the two collar corners and its depth point, with at least 33 sampled boundary points; never replace it with a V or straight segments. Neckline shape is garment-dependent, not an anatomical law. If V/square/asymmetric, preserve the actual shape and set web_lab.neckline to polygon. Exclude visible back fabric/labels inside the opening. Do not remove printed white areas as holes.
+All point arrays must contain finite numbers within image bounds. Shoulder/hem anchors must not be collinear. Outer and sleeve polygons must follow the image, with no crossings. Provide visible sleeve polygons only. Use cuff_edge_px with exactly two endpoints when reliably visible; otherwise left_sleeve_hem_center/right_sleeve_hem_center define cuff centres.
+Do not hallucinate hidden points. If a requested point cannot be observed, set it to null, list its key in uncertain_points, and set review_required=true. Such an answer requires manual correction before import. Estimated but plausible points must be listed in web_lab.inferred_points. Do not claim measurements or exact confidence from a single photograph.
+Output structure (replace ALL descriptive strings with actual arrays/numbers):
+{
+  "schema_version": "bootic.garment-metadata/0.1",
+  "source": {
+    "width_px": "ACTUAL_IMAGE_WIDTH",
+    "height_px": "ACTUAL_IMAGE_HEIGHT",
+    "points_convention": "image_left/image_right; not anatomical left/right"
+  },
+  "segmentation": {
+    "outer_contour_px": "ordered [[x,y], ...], 3..1024 points",
+    "subtract_polygons_px": {
+      "neck": "ordered dense polygon following the actual neck opening"
+    }
+  },
+  "landmarks_px": {
+    "shoulder_image_left": "[x,y] or null if unobservable",
+    "shoulder_image_right": "[x,y] or null if unobservable",
+    "hem_center": "[x,y] or null if unobservable",
+    "left_sleeve_hem_center": "[x,y] or null if unobservable",
+    "right_sleeve_hem_center": "[x,y] or null if unobservable",
+    "left_sleeve_start": "[x,y] or null if unobservable",
+    "right_sleeve_start": "[x,y] or null if unobservable",
+    "left_armpit": "[x,y] or null if unobservable",
+    "right_armpit": "[x,y] or null if unobservable",
+    "left_hem": "[x,y] or null if unobservable",
+    "right_hem": "[x,y] or null if unobservable",
+    "neck_image_left": "[x,y] or null if unobservable",
+    "neck_image_right": "[x,y] or null if unobservable",
+    "front_collar_bottom": "[x,y] or null if unobservable"
+  },
+  "regions": {
+    "sleeve_image_left": {
+      "polygon_px": "[[x,y], ...]"
+    },
+    "sleeve_image_right": {
+      "polygon_px": "[[x,y], ...]"
+    }
+  },
+  "web_lab": {
+    "neckline": "parabola for a round neckline; polygon for other necklines",
+    "inferred_points": []
+  },
+  "review_required": false,
+  "uncertain_points": []
+}
