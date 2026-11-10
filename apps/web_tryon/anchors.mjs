@@ -4,12 +4,12 @@ export const ANCHORS = [
   {id:1, key:'left', source:'shoulder_image_left', label:'گوشهٔ شانه چپ'},
   {id:2, key:'right', source:'shoulder_image_right', label:'گوشهٔ شانه راست'},
   {id:3, key:'hem', source:'hem_center', label:'وسط پایین لباس'},
-  {id:4, key:'cuffLeft', source:'left_sleeve_hem_center', label:'انتهای آستین چپ'},
-  {id:5, key:'cuffRight', source:'right_sleeve_hem_center', label:'انتهای آستین راست'},
+  {id:4, key:'cuffLeft', source:'left_cuff_upper', label:'گوشهٔ بالایی سرآستین چپ'},
+  {id:5, key:'cuffRight', source:'right_cuff_upper', label:'گوشهٔ بالایی سرآستین راست'},
   {id:6, key:'wristLeft', label:'مچ چپ؛ راهنمای بدن'},
   {id:7, key:'wristRight', label:'مچ راست؛ راهنمای بدن'},
-  {id:8, key:'sleeveStartLeft', source:'left_sleeve_start', label:'بالای ابتدای آستین چپ'},
-  {id:9, key:'sleeveStartRight', source:'right_sleeve_start', label:'بالای ابتدای آستین راست'},
+  {id:8, key:'cuffLowerLeft', source:'left_cuff_lower', label:'گوشهٔ پایینی سرآستین چپ'},
+  {id:9, key:'cuffLowerRight', source:'right_cuff_lower', label:'گوشهٔ پایینی سرآستین راست'},
   {id:10, key:'armpitLeft', source:'left_armpit', label:'زیر بغل چپ'},
   {id:11, key:'armpitRight', source:'right_armpit', label:'زیر بغل راست'},
   {id:12, key:'hemLeft', source:'left_hem', label:'گوشهٔ پایین چپ'},
@@ -64,8 +64,21 @@ export function enrichMetadata(input) {
   function add(key,p){if(l[key]!==undefined)return;l[key]=p.map((v,i)=>Math.max(0,Math.min(v,i?m.source.height_px:m.source.width_px)));inferred.add(key);}
   for(const [key,p] of Object.entries(defaults))add(key,p);
   for(const side of ['left','right']){
-    const a=l[`shoulder_image_${side}`], b=l[`${side}_sleeve_hem_center`];
-    if(Array.isArray(b))add(`${side}_sleeve_start`,a.map((v,i)=>v+.15*(b[i]-v)));
+    const region=m.regions?.[`sleeve_image_${side}`];
+    const edge=region?.cuff_edge_px;
+    if(Array.isArray(edge)&&edge.length===2&&edge.every(p=>Array.isArray(p)&&p.length===2&&p.every(Number.isFinite))){
+      const [upper,lower]=[...edge].sort((a,b)=>a[1]-b[1]||a[0]-b[0]);
+      l[`${side}_cuff_upper`]=[...upper];l[`${side}_cuff_lower`]=[...lower];
+    }else{
+      // Legacy centre-only metadata cannot identify corners exactly.
+      const centre=l[`${side}_sleeve_hem_center`],shoulder=l[`shoulder_image_${side}`];
+      if(Array.isArray(centre)&&centre.every(Number.isFinite)){
+        const axis=[centre[0]-shoulder[0],centre[1]-shoulder[1]],length=Math.max(1,Math.hypot(...axis));
+        const normal=[-axis[1]/length*span*.18,axis[0]/length*span*.18];
+        const ends=[centre.map((v,i)=>v+normal[i]),centre.map((v,i)=>v-normal[i])].sort((a,b)=>a[1]-b[1]);
+        add(`${side}_cuff_upper`,ends[0]);add(`${side}_cuff_lower`,ends[1]);
+      }
+    }
   }
   m.web_lab={...m.web_lab,inferred_points:[...inferred]};
   return m;
@@ -107,16 +120,16 @@ export function buildPrompt(width=null,height=null) {
     source:{width_px:width??'ACTUAL_IMAGE_WIDTH',height_px:height??'ACTUAL_IMAGE_HEIGHT',points_convention:'image_left/image_right; not anatomical left/right'},
     segmentation:{outer_contour_px:'ordered [[x,y], ...], 3..1024 points',subtract_polygons_px:{neck:'ordered dense polygon following the actual neck opening'}},
     landmarks_px:Object.fromEntries(ANCHORS.filter(a=>a.source).map(a=>[a.source,'[x,y] or null if unobservable'])),
-    regions:{sleeve_image_left:{polygon_px:'[[x,y], ...]'},sleeve_image_right:{polygon_px:'[[x,y], ...]'}},
+    regions:{sleeve_image_left:{polygon_px:'[[x,y], ...]',cuff_edge_px:'[left_cuff_upper,left_cuff_lower]'},sleeve_image_right:{polygon_px:'[[x,y], ...]',cuff_edge_px:'[right_cuff_upper,right_cuff_lower]'}},
     web_lab:{neckline:'parabola for a round neckline; polygon for other necklines',inferred_points:[]},
     review_required:false,uncertain_points:[],
   };
   return `Analyze the attached ORIGINAL garment photograph for a virtual try-on tool. Return ONLY one valid JSON object, no markdown. Do not edit or crop the photo.
 Use original image pixels: origin top-left, x right, y down. Left/right ALWAYS means IMAGE-left/image-right. Read the actual image resolution; never invent it. Current canvas ${width??'?'} x ${height??'?'} is a hint only: verify it against the attached file.
 Find the outer silhouette, ALL neck/cutout holes and these 14 garment landmarks:\n${ANCHORS.filter(a=>a.source).map(a=>`${a.id}. ${a.source}: ${a.label}`).join('\n')}
-Definitions: shoulder corners are the outer torso/shoulder corners. Sleeve-start points are the TOP sleeve insertion/seam starts, separate from cuff centres. Armpits are the lower armhole/torso-sleeve junctions (left_armpit and right_armpit); do not confuse them with the shoulder or elbow. Cuffs are the centres of sleeve openings. Hem points are left corner, centre and right corner of the bottom edge. Collar corners are the two neck-opening endpoints at the shoulder/neck junction; front_collar_bottom is the deepest visible FRONT collar point. Do NOT include wrists: IDs 6 and 7 are body-only guides.
+Definitions: shoulder corners are the outer torso/shoulder corners. IDs 4/5 are the UPPER corners of the LEFT/RIGHT cuff openings; IDs 8/9 are their LOWER corners. They are NOT sleeve insertion/shoulder points and NOT cuff centres. Each upper/lower pair is the two endpoints of that cuff edge. Armpits are the lower armhole/torso-sleeve junctions (left_armpit and right_armpit); do not confuse them with the shoulder or elbow. Cuff centres are computed as arithmetic midpoints of their two corners. Hem points are left corner, centre and right corner of the bottom edge. Collar corners are the two neck-opening endpoints at the shoulder/neck junction; front_collar_bottom is the deepest visible FRONT collar point. Do NOT include wrists: IDs 6 and 7 are body-only guides.
 For a round neckline approximate the opening by a smooth quadratic/parabolic U through the two collar corners and its depth point, with at least 33 sampled boundary points; never replace it with a V or straight segments. Neckline shape is garment-dependent, not an anatomical law. If V/square/asymmetric, preserve the actual shape and set web_lab.neckline to polygon. Exclude visible back fabric/labels inside the opening. Do not remove printed white areas as holes.
-All point arrays must contain finite numbers within image bounds. Shoulder/hem anchors must not be collinear. Outer and sleeve polygons must follow the image, with no crossings. Provide visible sleeve polygons only. Use cuff_edge_px with exactly two endpoints when reliably visible; otherwise left_sleeve_hem_center/right_sleeve_hem_center define cuff centres.
+All point arrays must contain finite numbers within image bounds. Shoulder/hem anchors must not be collinear. Outer and sleeve polygons must follow the image, with no crossings. Provide visible sleeve polygons only. For each visible sleeve provide cuff_edge_px=[upper_corner,lower_corner] exactly matching left_cuff_upper/left_cuff_lower or right_cuff_upper/right_cuff_lower. Also provide left_sleeve_hem_center/right_sleeve_hem_center as their arithmetic midpoints for Android compatibility. If a corner is hidden do not replace it with the shoulder or invent a measured point.
 Do not hallucinate hidden points. If a requested point cannot be observed, set it to null, list its key in uncertain_points, and set review_required=true. Such an answer requires manual correction before import. Estimated but plausible points must be listed in web_lab.inferred_points. Do not claim measurements or exact confidence from a single photograph.
 Output structure (replace ALL descriptive strings with actual arrays/numbers):\n${JSON.stringify(schema,null,2)}`;
 }

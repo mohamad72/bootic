@@ -4,7 +4,7 @@ const $=id=>document.getElementById(id),canvas=$('preview'),ctx=canvas.getContex
 const fa=n=>Number(n).toLocaleString('fa-IR');
 let tab='source',image=null,metadata=null,spec=null,masked=null,filename='لباس نمونه',busy=false,drag=null,lastMesh=null;
 let selectedAnchor='left';
-const initialBody={left:[358,320],right:[663,320],hem:[510,750],elbowLeft:[282,535],elbowRight:[735,535],wristLeft:[237,780],wristRight:[780,780],cuffLeft:[282,535],cuffRight:[735,535],sleeveStartLeft:[337,352],sleeveStartRight:[687,352],armpitLeft:[357,475],armpitRight:[663,475],hemLeft:[360,750],hemRight:[653,750],neckLeft:[445,270],neckRight:[583,270],neckBottom:[514,302]};
+const initialBody={left:[358,320],right:[663,320],hem:[510,750],elbowLeft:[282,535],elbowRight:[735,535],wristLeft:[237,780],wristRight:[780,780],cuffLeft:[282,535],cuffRight:[735,535],cuffLowerLeft:[337,554],cuffLowerRight:[680,554],armpitLeft:[357,475],armpitRight:[663,475],hemLeft:[360,750],hemRight:[653,750],neckLeft:[445,270],neckRight:[583,270],neckBottom:[514,302]};
 let body=structuredClone(initialBody),initialSpec=null;
 const person=new Image();person.src='assets/person.png';person.onload=()=>draw();person.onerror=()=>status('عکس نمونه بارگذاری نشد؛ صفحه را از سرور محلی باز کنید.',true);
 function status(message,error=false){$('status').textContent=message;$('status').classList.toggle('error',error);}
@@ -45,11 +45,14 @@ function moveAnchor(key,q){
   if(tab==='source'){
     if(!metadata)return;
     const a=ANCHORS.find(a=>a.key===key),m=structuredClone(metadata);
-    const previous=m.landmarks_px[a.source];
     m.landmarks_px[a.source]=q;
-    if(key==='cuffLeft'||key==='cuffRight'){
-      const region=m.regions?.[key==='cuffLeft'?'sleeve_image_left':'sleeve_image_right'];
-      if(region?.cuff_edge_px)region.cuff_edge_px=region.cuff_edge_px.map(p=>p.map((v,i)=>v+q[i]-previous[i]));
+    const side=['cuffLeft','cuffLowerLeft'].includes(key)?'left':['cuffRight','cuffLowerRight'].includes(key)?'right':null;
+    if(side){
+      const upper=m.landmarks_px[`${side}_cuff_upper`],lower=m.landmarks_px[`${side}_cuff_lower`];
+      if(Math.hypot(upper[0]-lower[0],upper[1]-lower[1])<1){status('دو گوشهٔ سرآستین باید از هم جدا باشند.',true);updateCoordinates();return;}
+      const region=m.regions?.[`sleeve_image_${side}`];
+      if(region)region.cuff_edge_px=[upper,lower];
+      m.landmarks_px[`${side}_sleeve_hem_center`]=upper.map((v,i)=>(v+lower[i])/2);
     }
     m.web_lab.inferred_points=m.web_lab.inferred_points.filter(k=>k!==a.source);
     try{applyNeck(m);const next=validateMetadata(m);spec=next;metadata=m;makeMask();}

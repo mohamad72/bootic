@@ -4,7 +4,7 @@ import {sampleMetadata, validateMetadata, project} from '../geometry.mjs';
 export function runTests(){
  const m=enrichMetadata(sampleMetadata());
  assert.equal(ANCHORS.length,16);
- for(const k of ['left_armpit','right_armpit','left_hem','right_hem','neck_image_left','neck_image_right','front_collar_bottom','left_sleeve_start','right_sleeve_start'])assert(Array.isArray(m.landmarks_px[k]),k);
+ for(const k of ['left_armpit','right_armpit','left_hem','right_hem','neck_image_left','neck_image_right','front_collar_bottom','left_cuff_upper','right_cuff_upper','left_cuff_lower','right_cuff_lower'])assert(Array.isArray(m.landmarks_px[k]),k);
  const curve=neckCurve([20,10],[80,10],[50,40]);
  assert.deepEqual(curve[0],[20,10]);assert.deepEqual(curve.at(-1),[80,10]);
  assert.deepEqual(curve[(curve.length-1)/2],[50,40]);

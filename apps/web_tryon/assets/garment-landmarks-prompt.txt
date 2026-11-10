@@ -4,10 +4,10 @@ Find the outer silhouette, ALL neck/cutout holes and these 14 garment landmarks:
 1. shoulder_image_left: گوشهٔ شانه چپ
 2. shoulder_image_right: گوشهٔ شانه راست
 3. hem_center: وسط پایین لباس
-4. left_sleeve_hem_center: انتهای آستین چپ
-5. right_sleeve_hem_center: انتهای آستین راست
-8. left_sleeve_start: بالای ابتدای آستین چپ
-9. right_sleeve_start: بالای ابتدای آستین راست
+4. left_cuff_upper: گوشهٔ بالایی سرآستین چپ
+5. right_cuff_upper: گوشهٔ بالایی سرآستین راست
+8. left_cuff_lower: گوشهٔ پایینی سرآستین چپ
+9. right_cuff_lower: گوشهٔ پایینی سرآستین راست
 10. left_armpit: زیر بغل چپ
 11. right_armpit: زیر بغل راست
 12. left_hem: گوشهٔ پایین چپ
@@ -15,9 +15,9 @@ Find the outer silhouette, ALL neck/cutout holes and these 14 garment landmarks:
 14. neck_image_left: گوشهٔ یقه چپ
 15. neck_image_right: گوشهٔ یقه راست
 16. front_collar_bottom: پایین‌ترین نقطهٔ یقه
-Definitions: shoulder corners are the outer torso/shoulder corners. Sleeve-start points are the TOP sleeve insertion/seam starts, separate from cuff centres. Armpits are the lower armhole/torso-sleeve junctions (left_armpit and right_armpit); do not confuse them with the shoulder or elbow. Cuffs are the centres of sleeve openings. Hem points are left corner, centre and right corner of the bottom edge. Collar corners are the two neck-opening endpoints at the shoulder/neck junction; front_collar_bottom is the deepest visible FRONT collar point. Do NOT include wrists: IDs 6 and 7 are body-only guides.
+Definitions: shoulder corners are the outer torso/shoulder corners. IDs 4/5 are the UPPER corners of the LEFT/RIGHT cuff openings; IDs 8/9 are their LOWER corners. They are NOT sleeve insertion/shoulder points and NOT cuff centres. Each upper/lower pair is the two endpoints of that cuff edge. Armpits are the lower armhole/torso-sleeve junctions (left_armpit and right_armpit); do not confuse them with the shoulder or elbow. Cuff centres are computed as arithmetic midpoints of their two corners. Hem points are left corner, centre and right corner of the bottom edge. Collar corners are the two neck-opening endpoints at the shoulder/neck junction; front_collar_bottom is the deepest visible FRONT collar point. Do NOT include wrists: IDs 6 and 7 are body-only guides.
 For a round neckline approximate the opening by a smooth quadratic/parabolic U through the two collar corners and its depth point, with at least 33 sampled boundary points; never replace it with a V or straight segments. Neckline shape is garment-dependent, not an anatomical law. If V/square/asymmetric, preserve the actual shape and set web_lab.neckline to polygon. Exclude visible back fabric/labels inside the opening. Do not remove printed white areas as holes.
-All point arrays must contain finite numbers within image bounds. Shoulder/hem anchors must not be collinear. Outer and sleeve polygons must follow the image, with no crossings. Provide visible sleeve polygons only. Use cuff_edge_px with exactly two endpoints when reliably visible; otherwise left_sleeve_hem_center/right_sleeve_hem_center define cuff centres.
+All point arrays must contain finite numbers within image bounds. Shoulder/hem anchors must not be collinear. Outer and sleeve polygons must follow the image, with no crossings. Provide visible sleeve polygons only. For each visible sleeve provide cuff_edge_px=[upper_corner,lower_corner] exactly matching left_cuff_upper/left_cuff_lower or right_cuff_upper/right_cuff_lower. Also provide left_sleeve_hem_center/right_sleeve_hem_center as their arithmetic midpoints for Android compatibility. If a corner is hidden do not replace it with the shoulder or invent a measured point.
 Do not hallucinate hidden points. If a requested point cannot be observed, set it to null, list its key in uncertain_points, and set review_required=true. Such an answer requires manual correction before import. Estimated but plausible points must be listed in web_lab.inferred_points. Do not claim measurements or exact confidence from a single photograph.
 Output structure (replace ALL descriptive strings with actual arrays/numbers):
 {
@@ -37,10 +37,10 @@ Output structure (replace ALL descriptive strings with actual arrays/numbers):
     "shoulder_image_left": "[x,y] or null if unobservable",
     "shoulder_image_right": "[x,y] or null if unobservable",
     "hem_center": "[x,y] or null if unobservable",
-    "left_sleeve_hem_center": "[x,y] or null if unobservable",
-    "right_sleeve_hem_center": "[x,y] or null if unobservable",
-    "left_sleeve_start": "[x,y] or null if unobservable",
-    "right_sleeve_start": "[x,y] or null if unobservable",
+    "left_cuff_upper": "[x,y] or null if unobservable",
+    "right_cuff_upper": "[x,y] or null if unobservable",
+    "left_cuff_lower": "[x,y] or null if unobservable",
+    "right_cuff_lower": "[x,y] or null if unobservable",
     "left_armpit": "[x,y] or null if unobservable",
     "right_armpit": "[x,y] or null if unobservable",
     "left_hem": "[x,y] or null if unobservable",
@@ -51,10 +51,12 @@ Output structure (replace ALL descriptive strings with actual arrays/numbers):
   },
   "regions": {
     "sleeve_image_left": {
-      "polygon_px": "[[x,y], ...]"
+      "polygon_px": "[[x,y], ...]",
+      "cuff_edge_px": "[left_cuff_upper,left_cuff_lower]"
     },
     "sleeve_image_right": {
-      "polygon_px": "[[x,y], ...]"
+      "polygon_px": "[[x,y], ...]",
+      "cuff_edge_px": "[right_cuff_upper,right_cuff_lower]"
     }
   },
   "web_lab": {

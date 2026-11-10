@@ -39,9 +39,9 @@ Tests cover background removal, alpha holes, contour coordinates, input validati
 
 The shared numbering now includes 16 fixed-person markers and 14 garment markers:
 
-- 1/2 shoulder corners; 3 hem centre; 4/5 cuff centres.
+- 1/2 shoulder corners; 3 hem centre; 4/5 upper cuff corners.
 - 6/7 wrist guides appear only on the person.
-- 8/9 upper sleeve insertion starts; 10/11 underarm junctions.
+- 8/9 lower cuff corners; 10/11 underarm junctions.
 - 12/13 lower hem corners; 14/15 collar corners; 16 front collar depth.
 
 Select a point from the dropdown when markers are close; drag it or enter X/Y and press **اعمال مختصات** (or Enter). Body points are manually annotated. Missing legacy garment points are explicitly marked as suggestions; the upload does not magically run a garment-landmark model. Existing cuff edges remain authoritative for their midpoint. The two underarm controls refer to the visible garment armhole junction and a chosen body attachment target, not measured hidden anatomy.
@@ -51,3 +51,5 @@ The optional parabolic round-neck cut is a 64-segment quadratic through both end
 Extra anchors drive a bounded local fitting field. When target positions would invert mesh triangles, fitting is attenuated. Yellow filled circles are requested destinations; cyan hollow circles and dashed residuals show where the rendered mesh actually maps each source anchor. The two may differ when constrained.
 
 The **کپی پرامپت هوش مصنوعی** control supplies the complete data contract and all 14 garment-point names. The same reusable prompt is available at `assets/garment-landmarks-prompt.txt`. It asks the external AI to identify uncertainty instead of hallucinating hidden points. Responses flagged `review_required` or containing unknown coordinates require correction before import. This tool does not send the photograph to an AI service.
+
+The sample now preserves the exact cuff-corner positions moved by the user in the browser: 4/5 are the upper corners, 8/9 the lower corners. They no longer represent sleeve insertion. Each pair is exported as `regions.sleeve_image_left/right.cuff_edge_px`; the arithmetic midpoint remains `left/right_sleeve_hem_center` for Android. Source corner edits update both the pair and midpoint. No measured coordinate is snapped to a generic default.
