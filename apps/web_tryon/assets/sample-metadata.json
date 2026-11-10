@@ -1,0 +1,160 @@
+{
+  "schema_version": "bootic.garment-metadata/0.1",
+  "source": {
+    "width_px": 600,
+    "height_px": 700,
+    "points_convention": "image_left/image_right; not anatomical left/right"
+  },
+  "segmentation": {
+    "outer_contour_px": [
+      [
+        185,
+        100
+      ],
+      [
+        240,
+        85
+      ],
+      [
+        300,
+        120
+      ],
+      [
+        360,
+        85
+      ],
+      [
+        415,
+        100
+      ],
+      [
+        570,
+        210
+      ],
+      [
+        490,
+        320
+      ],
+      [
+        420,
+        275
+      ],
+      [
+        420,
+        620
+      ],
+      [
+        180,
+        620
+      ],
+      [
+        180,
+        275
+      ],
+      [
+        110,
+        320
+      ],
+      [
+        30,
+        210
+      ]
+    ],
+    "subtract_polygons_px": {
+      "neck": [
+        [
+          240,
+          85
+        ],
+        [
+          300,
+          120
+        ],
+        [
+          360,
+          85
+        ],
+        [
+          340,
+          150
+        ],
+        [
+          260,
+          150
+        ]
+      ]
+    }
+  },
+  "landmarks_px": {
+    "shoulder_image_left": [
+      185,
+      100
+    ],
+    "shoulder_image_right": [
+      415,
+      100
+    ],
+    "hem_center": [
+      300,
+      620
+    ],
+    "left_armpit": [
+      180,
+      275
+    ],
+    "right_armpit": [
+      420,
+      275
+    ],
+    "left_sleeve_hem_center": [
+      70,
+      265
+    ],
+    "right_sleeve_hem_center": [
+      530,
+      265
+    ]
+  },
+  "regions": {
+    "sleeve_image_left": {
+      "polygon_px": [
+        [
+          185,
+          100
+        ],
+        [
+          180,
+          275
+        ],
+        [
+          110,
+          320
+        ],
+        [
+          30,
+          210
+        ]
+      ]
+    },
+    "sleeve_image_right": {
+      "polygon_px": [
+        [
+          415,
+          100
+        ],
+        [
+          570,
+          210
+        ],
+        [
+          490,
+          320
+        ],
+        [
+          420,
+          275
+        ]
+      ]
+    }
+  }
+}
