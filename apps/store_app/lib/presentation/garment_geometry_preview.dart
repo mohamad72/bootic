@@ -46,7 +46,7 @@ class GarmentGeometryPreview extends StatelessWidget {
                       const Center(child: Text('عکس اصلی در دسترس نیست')),
                 ),
                 IgnorePointer(
-                  child: CustomPaint(painter: _GeometryPainter(data)),
+                  child: CustomPaint(painter: GarmentGeometryPainter(data)),
                 ),
               ],
             ),
@@ -63,8 +63,8 @@ class GarmentGeometryPreview extends StatelessWidget {
   );
 }
 
-class _GeometryPainter extends CustomPainter {
-  _GeometryPainter(this.geometry);
+class GarmentGeometryPainter extends CustomPainter {
+  GarmentGeometryPainter(this.geometry);
   final Map<String, Object?> geometry;
 
   @override
@@ -102,6 +102,6 @@ class _GeometryPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_GeometryPainter oldDelegate) =>
+  bool shouldRepaint(GarmentGeometryPainter oldDelegate) =>
       oldDelegate.geometry != geometry;
 }

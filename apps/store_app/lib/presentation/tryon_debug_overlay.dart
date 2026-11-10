@@ -99,7 +99,7 @@ class TryonDebugOverlay extends StatelessWidget {
         children: [
           Positioned.fill(
             child: IgnorePointer(
-              child: CustomPaint(painter: _PoseDebugPainter(d, p)),
+              child: CustomPaint(painter: PoseDebugPainter(d, p)),
             ),
           ),
           Positioned(
@@ -179,8 +179,8 @@ class TryonDebugOverlay extends StatelessWidget {
   );
 }
 
-class _PoseDebugPainter extends CustomPainter {
-  _PoseDebugPainter(this.data, this.placement);
+class PoseDebugPainter extends CustomPainter {
+  PoseDebugPainter(this.data, this.placement);
   final PoseDebugSnapshot? data;
   final LivePlacement? placement;
   static const connections = [
@@ -330,6 +330,6 @@ class _PoseDebugPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_PoseDebugPainter oldDelegate) =>
+  bool shouldRepaint(PoseDebugPainter oldDelegate) =>
       oldDelegate.data != data || oldDelegate.placement != placement;
 }

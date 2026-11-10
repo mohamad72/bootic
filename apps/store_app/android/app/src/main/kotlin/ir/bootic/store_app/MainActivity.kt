@@ -64,6 +64,7 @@ class MainActivity : FlutterActivity() {
     private var phoneGarment: GarmentMeshView? = null
     private var garmentGeneration = 0
     private var garmentGhost = false
+    private var garmentHidden = false
     private var placement = Placement()
     private var sceneEffect = EffectMode.NONE
     private var phoneEffects: TryonEffectsView? = null
@@ -259,6 +260,7 @@ class MainActivity : FlutterActivity() {
                             it.setRenderAsset(renderAsset)
                             it.setObservation(latestPose)
                             it.setGhost(garmentGhost)
+                            it.setHidden(garmentHidden)
                             it.setPrice(priceText)
                             it.setFeedback(feedbackText)
                             it.setPlacement(placement)
@@ -276,9 +278,15 @@ class MainActivity : FlutterActivity() {
             "detachDisplay" -> { detachDisplay(); result.success(null) }
             "setGarment" -> setGarment(call, result)
             "shareGarmentReference" -> shareGarmentReference(call, result)
+            "setGarmentHidden" -> {
+                garmentHidden = call.argument<Boolean>("hidden") == true
+                updatePhoneGarment()
+                presentation?.setHidden(garmentHidden)
+                result.success(null)
+            }
             "setGarmentGhost" -> {
                 garmentGhost = call.argument<Boolean>("enabled") == true
-                phoneGarment?.alpha = if (garmentGhost) 0.3f else 1f
+                phoneGarment?.alpha = if (garmentHidden) 0f else if (garmentGhost) 0.3f else 1f
                 presentation?.setGhost(garmentGhost)
                 result.success(null)
             }
@@ -538,7 +546,7 @@ class MainActivity : FlutterActivity() {
         phoneGarment?.apply {
             asset = renderAsset
             mirrorTexture = mirror
-            alpha = if (garmentGhost) 0.3f else 1f
+            alpha = if (garmentHidden) 0f else if (garmentGhost) 0.3f else 1f
             if (latestPose?.box != null) pose = latestPose
             visibility = if (running && poseVisible && renderAsset != null && !sceneEffect.blocksGarment) View.VISIBLE else View.INVISIBLE
         }
@@ -1050,7 +1058,11 @@ private class CustomerPresentation(context: Context, display: Display) : android
         setPoseVisible(poseAvailable)
     }
     fun setObservation(value: PoseObservation?) { if (::mesh.isInitialized && value?.box != null) mesh.pose = value }
-    fun setGhost(value: Boolean) { if (::mesh.isInitialized) mesh.alpha = if (value) 0.3f else 1f }
+    private var debugHidden = false
+    private var debugGhost = false
+    private fun updateDebugAlpha() { if (::mesh.isInitialized) mesh.alpha = if (debugHidden) 0f else if (debugGhost) 0.3f else 1f }
+    fun setHidden(value: Boolean) { debugHidden = value; updateDebugAlpha() }
+    fun setGhost(value: Boolean) { debugGhost = value; updateDebugAlpha() }
     fun setMirror(value: Boolean) {
         if (::overlay.isInitialized) overlay.scaleX = if (value) -1f else 1f
         if (::mesh.isInitialized) mesh.mirrorTexture = value

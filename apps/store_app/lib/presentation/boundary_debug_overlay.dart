@@ -38,7 +38,7 @@ class BoundaryDebugOverlay extends StatelessWidget {
         children: [
           Positioned.fill(
             child: IgnorePointer(
-              child: CustomPaint(painter: _BoundaryPainter(snapshot, lines)),
+              child: CustomPaint(painter: BoundaryDebugPainter(snapshot, lines)),
             ),
           ),
           Positioned(
@@ -128,8 +128,8 @@ class BoundaryDebugOverlay extends StatelessWidget {
   );
 }
 
-class _BoundaryPainter extends CustomPainter {
-  _BoundaryPainter(this.snapshot, this.lines);
+class BoundaryDebugPainter extends CustomPainter {
+  BoundaryDebugPainter(this.snapshot, this.lines);
   final PoseDebugSnapshot? snapshot;
   final List<BoundaryDebugLine> lines;
   @override
@@ -212,6 +212,6 @@ class _BoundaryPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_BoundaryPainter oldDelegate) =>
+  bool shouldRepaint(BoundaryDebugPainter oldDelegate) =>
       oldDelegate.snapshot != snapshot;
 }

@@ -13,7 +13,7 @@ import '../domain/garment_model_metadata.dart';
 import '../domain/persian.dart';
 import '../domain/pose_diagnostics.dart';
 import 'tryon_debug_overlay.dart';
-import 'boundary_debug_overlay.dart';
+import 'stage_debug_overlay.dart';
 
 /// Customer mode: opening the tab opens the front camera immediately.
 class LiveTryonScreen extends ConsumerStatefulWidget {
@@ -30,6 +30,10 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   StreamSubscription<PoseDebugSnapshot>? _debugSubscription;
   bool _debugEnabled = false;
   bool _boundaryEnabled = false;
+  DebugStage _debugStage = DebugStage.source;
+  Map<String, Object?>? _diagnosticGeometry;
+  bool get _garmentHidden =>
+      _boundaryEnabled && _debugStage != DebugStage.placement;
   bool _boundaryGhost = true;
   bool _debugGhost = false;
   bool _debugDetails = false;
@@ -152,7 +156,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         !_switchingCamera &&
         !_votePending &&
         !_changingGarment &&
-        !_boundaryEnabled &&
+        !_diagnosticsEnabled &&
         !_finished,
   );
 
@@ -174,7 +178,9 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
       );
     }
     if (!mounted || session != _session || !_running) return;
-    await _bridge.setGarment(photo, renderMetadata: render?.toNativeMap());
+    _diagnosticGeometry = render?.toNativeMap();
+    await _bridge.setGarment(photo, renderMetadata: _diagnosticGeometry);
+    await _bridge.setGarmentHidden(_garmentHidden);
     await _bridge.setGarmentGhost(_diagnosticGhost);
     await _bridge.setPrice(
       garment?.effectivePrice == null
@@ -356,7 +362,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
   }
 
   Future<void> _vote(bool liked) async {
-    if (_boundaryEnabled ||
+    if (_diagnosticsEnabled ||
         !_running ||
         !_personFound ||
         !_garmentReady ||
@@ -497,6 +503,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
     required bool debug,
     required bool boundaries,
   }) async {
+    if (_votePending || _switchingCamera) return;
     try {
       await _bridge.setPoseDebugEnabled(debug || boundaries);
       if (mounted) {
@@ -507,6 +514,7 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
         });
       }
       await _bridge.setGarmentGhost(_diagnosticGhost);
+      await _bridge.setGarmentHidden(_garmentHidden);
       await _syncVoting();
     } catch (error) {
       _showError(error);
@@ -602,8 +610,8 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
           left: 68,
           child: IconButton.filledTonal(
             tooltip: _boundaryEnabled
-                ? 'بستن مرز بدن و خم لباس'
-                : 'نمایش مرز بدن و خم لباس',
+                ? 'بستن دیباگ سه‌مرحله‌ای'
+                : 'دیباگ سه‌مرحله‌ای',
             isSelected: _boundaryEnabled,
             onPressed: _running || _boundaryEnabled ? _toggleBoundaries : null,
             icon: const Icon(Icons.polyline_outlined),
@@ -758,7 +766,21 @@ class _LiveTryonScreenState extends ConsumerState<LiveTryonScreen>
           ),
         if (_boundaryEnabled)
           Positioned.fill(
-            child: BoundaryDebugOverlay(
+            child: StageDebugOverlay(
+              stage: _debugStage,
+              onStageChanged: (value) {
+                setState(() => _debugStage = value);
+                unawaited(
+                  _bridge
+                      .setGarmentHidden(_garmentHidden)
+                      .catchError(_showError),
+                );
+              },
+              garmentName: selected == null
+                  ? 'بدون لباس'
+                  : '${selected.name} (${selected.id})',
+              photoPath: _photoPath(selected),
+              geometry: _diagnosticGeometry,
               snapshot: _poseDebug,
               ghost: _boundaryGhost,
               onGhostChanged: (value) {

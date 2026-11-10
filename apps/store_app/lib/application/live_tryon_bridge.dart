@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+
 import '../domain/pose_diagnostics.dart';
 
 class ExternalDisplay {
@@ -106,6 +107,9 @@ class LiveTryonBridge {
 
   Future<void> shareGarmentReference(String path) async =>
       _channel.invokeMethod<void>('shareGarmentReference', {'path': path});
+
+  Future<void> setGarmentHidden(bool hidden) async =>
+      _channel.invokeMethod<void>('setGarmentHidden', {'hidden': hidden});
 
   Future<void> setGarmentGhost(bool enabled) async =>
       _channel.invokeMethod<void>('setGarmentGhost', {'enabled': enabled});
